@@ -157,6 +157,37 @@ export default function SettingsPage() {
                 placeholder="gpt-4o-mini"
               />
             </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Provider</label>
+                <input
+                  className="form-input"
+                  value={config.ai.base_url ?? "https://openrouter.ai/api/v1"}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      ai: { ...config.ai, base_url: e.target.value || null },
+                    })
+                  }
+                  placeholder="https://openrouter.ai/api/v1"
+                />
+              </div>
+              <div className="form-group">
+                <label>API Key</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={config.ai.api_key ?? ""}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      ai: { ...config.ai, api_key: e.target.value || null },
+                    })
+                  }
+                  placeholder="sk-or-xxxxx"
+                />
+              </div>
+            </div>
 
             {config.ai.mode === "agent" && (
               <>
@@ -197,39 +228,6 @@ export default function SettingsPage() {
               </>
             )}
 
-            {config.ai.mode === "direct" && (
-              <>
-                <div className="form-group">
-                  <label>API Key</label>
-                  <input
-                    className="form-input"
-                    type="password"
-                    value={config.ai.api_key ?? ""}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        ai: { ...config.ai, api_key: e.target.value || null },
-                      })
-                    }
-                    placeholder="sk-or-xxxxx"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Base URL</label>
-                  <input
-                    className="form-input"
-                    value={config.ai.base_url ?? "https://openrouter.ai/api/v1"}
-                    onChange={(e) =>
-                      setConfig({
-                        ...config,
-                        ai: { ...config.ai, base_url: e.target.value },
-                      })
-                    }
-                    placeholder="https://openrouter.ai/api/v1"
-                  />
-                </div>
-              </>
-            )}
           </div>
         </div>
       </div>
