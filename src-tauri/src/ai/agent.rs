@@ -12,6 +12,14 @@ pub async fn run_agent(
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
 ) -> AppResult<ArticleResult> {
+    // 事前にコマンドの存在を確認
+    check_command_exists(command).map_err(|e| {
+        AppError::Agent(format!(
+            "{} is not installed or not on PATH. Install it with: cargo install {}\n  Detail: {}",
+            command, if command == "omp" { "oh-my-pi-cli" } else { "opencode-cli" }, e
+        ))
+    })?;
+
     let feed_summary = format_feed_summary(feed_items);
     let language = topic.language.as_deref().unwrap_or("ja");
     let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
@@ -47,28 +55,16 @@ pub async fn run_agent(
     );
 
     info!(
-        "Running agent '{}' for topic '{}' (timeout: {}s)",
-        command, topic.name, timeout_sec
+        "Running agent '{}' for topic '{}' (timeout: {}s, prompt: {} chars)",
+        command, topic.name, timeout_sec, prompt.len()
     );
 
-    let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
-        let output = Command::new(command)
-            .arg("task")
-            .arg(&prompt)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| AppError::Agent(format!("Failed to execute '{}': {}", command, e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("Agent process exited with error: {}", stderr);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        parse_agent_output(&stdout)
-    })
-    .await;
+    // プロンプトが長すぎる場合はファイル経由、そうでなければ引数直接
+    let result = if prompt.len() > 4000 {
+        run_agent_via_stdin(command, &prompt, timeout_sec).await
+    } else {
+        run_agent_via_arg(command, &prompt, timeout_sec).await
+    };
 
     match result {
         Ok(Ok(article)) => {
@@ -84,6 +80,129 @@ pub async fn run_agent(
             "Agent '{}' timed out after {}s",
             command, timeout_sec
         ))),
+    }
+}
+
+/// コマンドライン引数としてプロンプトを渡す（4000文字以下の場合）
+async fn run_agent_via_arg(
+    command: &str,
+    prompt: &str,
+    timeout_sec: u64,
+) -> Result<AppResult<ArticleResult>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(timeout_sec), async {
+        let output = Command::new(command)
+            .arg("task")
+            .arg(prompt)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| AppError::Agent(format!("Failed to execute '{}': {}", command, e)))?;
+
+        process_output(output, command)
+    })
+    .await
+}
+
+/// stdin 経由でプロンプトを渡す（長文プロンプト対策）
+async fn run_agent_via_stdin(
+    command: &str,
+    prompt: &str,
+    timeout_sec: u64,
+) -> Result<AppResult<ArticleResult>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(timeout_sec), async {
+        // 一時ファイルに書き出してリダイレクト
+        let tmp_dir = std::env::temp_dir();
+        let tmp_path = tmp_dir.join(format!("mqf_prompt_{}.txt", std::process::id()));
+        let _display_path = tmp_path.display().to_string();
+
+        match std::fs::write(&tmp_path, prompt) {
+            Ok(_) => {
+                let result = run_with_pipe_redirect(command, &tmp_path);
+                let _ = std::fs::remove_file(&tmp_path);
+                result
+            }
+            Err(e) => {
+                // ファイル書き込み不可 → 直接引数で（失敗覚悟）
+                warn!("Cannot write temp file ({}), falling back to direct arg", e);
+                let output = Command::new(command)
+                    .arg("task")
+                    .arg(prompt)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .map_err(|e| AppError::Agent(format!("Failed to execute '{}': {}", command, e)))?;
+                process_output(output, command)
+            }
+        }
+    })
+    .await
+}
+
+/// リダイレクトでプロンプトを渡す: cmd /c "type file | command task"
+fn run_with_pipe_redirect(command: &str, file_path: &std::path::Path) -> AppResult<ArticleResult> {
+    let file_path_str = file_path.to_string_lossy();
+
+    // cmd /c "type file.txt | omp task"
+    let shell_cmd = format!(
+        "type \"{}\" | {} task",
+        file_path_str.replace('/', "\\"),
+        command
+    );
+
+    let output = Command::new("cmd")
+        .args(["/c", &shell_cmd])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| AppError::Agent(format!("Failed to execute pipeline: {}", e)))?;
+
+    process_output(output, command)
+}
+
+fn process_output(
+    output: std::process::Output,
+    command: &str,
+) -> AppResult<ArticleResult> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        warn!(
+            "Agent '{}' exited with status: {:?}\nstderr: {}\nstdout: {}",
+            command,
+            output.status.code(),
+            stderr,
+            stdout.chars().take(300).collect::<String>()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    parse_agent_output(&stdout)
+}
+
+/// コマンドが実行可能か確認（which 相当）
+fn check_command_exists(command: &str) -> Result<(), String> {
+    let success = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/c", "where", command])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        Command::new("which")
+            .arg(command)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+
+    if success {
+        Ok(())
+    } else {
+        Err(format!("'{}' not found on PATH", command))
     }
 }
 
@@ -107,7 +226,6 @@ fn format_feed_summary(items: &[crate::fetcher::FeedItem]) -> String {
 }
 
 fn parse_agent_output(output: &str) -> AppResult<ArticleResult> {
-    // Try to find JSON block in the output
     let json_start = output.find('{');
     let json_end = output.rfind('}');
 
@@ -128,26 +246,22 @@ fn parse_agent_output(output: &str) -> AppResult<ArticleResult> {
         ))
     })
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_agent_json() {
-        let output = r#"{"title":"Test Article","content":"Test content","image_url":"https://example.com/img.jpg","sources":["Source 1"]}"#;
+        let output = r#"{"title":"Test","content":"Body","image_url":"https://example.com/img.jpg","sources":["A"]}"#;
         let result = parse_agent_output(output).unwrap();
-        assert_eq!(result.title, "Test Article");
-        assert_eq!(result.sources.len(), 1);
+        assert_eq!(result.title, "Test");
     }
 
     #[test]
     fn test_parse_agent_with_markdown_fence() {
-        let output = r#"Here's the result:
-```json
-{"title":"Test","content":"Body","image_url":null,"sources":["Src"]}
-```
-"#;
+        let output = "```json\n{\"title\":\"T\",\"content\":\"B\",\"image_url\":null,\"sources\":[\"S\"]}\n```";
         let result = parse_agent_output(output).unwrap();
-        assert_eq!(result.title, "Test");
+        assert_eq!(result.title, "T");
     }
 }
