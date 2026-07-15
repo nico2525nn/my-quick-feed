@@ -137,7 +137,7 @@ export default function SettingsPage() {
                   })
                 }
               >
-                <option value="agent">Agent Mode (OMP/OpenCode)</option>
+                <option value="agent">Agent Mode (OMP)</option>
                 <option value="direct">Direct Mode (API)</option>
               </select>
             </div>
@@ -204,7 +204,6 @@ export default function SettingsPage() {
                     }
                   >
                     <option value="omp">OMP (Oh My Pi)</option>
-                    <option value="opencode">OpenCode</option>
                   </select>
                 </div>
                 <div className="form-group">

@@ -5,7 +5,10 @@ use crate::ai::{ArticleResult, resolve_system_prompt};
 use crate::config::TopicConfig;
 use crate::errors::{AppError, AppResult};
 
-/// OMP / OpenCode CLI を子プロセスとして呼び出し、エージェントに記事生成を委託する
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// OMP CLI を子プロセスとして呼び出し、エージェントに記事生成を委託する
 pub async fn run_agent(
     command: &str,
     model: &str,
@@ -13,11 +16,12 @@ pub async fn run_agent(
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
 ) -> AppResult<ArticleResult> {
-    // 事前にコマンドの存在を確認
     check_command_exists(command).map_err(|e| {
         AppError::Agent(format!(
-            "{} is not installed or not on PATH. Install it with: cargo install {}\n  Detail: {}",
-            command, if command == "omp" { "oh-my-pi-cli" } else { "opencode-cli" }, e
+            "{} が見つかりません。npm install -g {} 等でインストールしてください。\n  Detail: {}",
+            command,
+            if command == "omp" { "oh-my-pi-cli" } else { command },
+            e
         ))
     })?;
 
@@ -60,24 +64,37 @@ pub async fn run_agent(
     );
 
     info!(
-        topic = %topic.name, "Running agent '{}' [model={}, timeout={}s, prompt={}chars]",
+        topic = %topic.name, "Running agent [cmd={}, model={}, timeout={}s, prompt={}chars]",
         command, model, timeout_sec, prompt.len()
     );
 
+    // プロンプトを一時ファイルに書き出し
+    let tmp_dir = std::env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("mqf_prompt_{}.txt", std::process::id()));
+    let has_file = std::fs::write(&tmp_path, &prompt).is_ok();
 
-    // プロンプトが長すぎる場合はファイル経由、そうでなければ引数直接
-    let result = if prompt.len() > 4000 {
-        run_agent_via_stdin(command, &prompt, timeout_sec).await
-    } else {
-        run_agent_via_arg(command, &prompt, timeout_sec).await
-    };
+    let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
+        let output = if has_file {
+            // omp -p --mode json @file.txt
+            run_omp(&tmp_path)
+        } else {
+            // ファイル不可 → 直接引数
+            run_omp_direct(&prompt)
+        };
+
+        if has_file {
+            std::fs::remove_file(&tmp_path).ok();
+        }
+        output
+    })
+    .await;
 
     match result {
         Ok(Ok(article)) => {
             info!(
-                "Agent generated article: {} (sources: {})",
-                article.title,
-                article.sources.len()
+                topic = %topic.name,
+                "Agent generated: \"{}\" ({} sources)",
+                article.title, article.sources.len()
             );
             Ok(article)
         }
@@ -89,127 +106,84 @@ pub async fn run_agent(
     }
 }
 
-/// コマンドライン引数としてプロンプトを渡す（4000文字以下の場合）
-async fn run_agent_via_arg(
-    command: &str,
-    prompt: &str,
-    timeout_sec: u64,
-) -> Result<AppResult<ArticleResult>, tokio::time::error::Elapsed> {
-    tokio::time::timeout(Duration::from_secs(timeout_sec), async {
-        let output = Command::new(command)
-            .arg("task")
-            .arg(prompt)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| AppError::Agent(format!("Failed to execute '{}': {}", command, e)))?;
+/// omp -p --mode json @file.txt
+fn run_omp(tmp_path: &std::path::Path) -> AppResult<ArticleResult> {
+    let mut cmd = Command::new("omp");
+    cmd.args(["-p", "--mode", "json"]);
+    cmd.arg(format!("@{}", tmp_path.to_string_lossy()));
+    hide_window(&mut cmd);
 
-        process_output(output, command)
-    })
-    .await
-}
-
-/// stdin 経由でプロンプトを渡す（長文プロンプト対策）
-async fn run_agent_via_stdin(
-    command: &str,
-    prompt: &str,
-    timeout_sec: u64,
-) -> Result<AppResult<ArticleResult>, tokio::time::error::Elapsed> {
-    tokio::time::timeout(Duration::from_secs(timeout_sec), async {
-        // 一時ファイルに書き出してリダイレクト
-        let tmp_dir = std::env::temp_dir();
-        let tmp_path = tmp_dir.join(format!("mqf_prompt_{}.txt", std::process::id()));
-        let _display_path = tmp_path.display().to_string();
-
-        match std::fs::write(&tmp_path, prompt) {
-            Ok(_) => {
-                let result = run_with_pipe_redirect(command, &tmp_path);
-                let _ = std::fs::remove_file(&tmp_path);
-                result
-            }
-            Err(e) => {
-                // ファイル書き込み不可 → 直接引数で（失敗覚悟）
-                warn!("Cannot write temp file ({}), falling back to direct arg", e);
-                let output = Command::new(command)
-                    .arg("task")
-                    .arg(prompt)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-                    .map_err(|e| AppError::Agent(format!("Failed to execute '{}': {}", command, e)))?;
-                process_output(output, command)
-            }
-        }
-    })
-    .await
-}
-
-/// リダイレクトでプロンプトを渡す: cmd /c "type file | command task"
-fn run_with_pipe_redirect(command: &str, file_path: &std::path::Path) -> AppResult<ArticleResult> {
-    let file_path_str = file_path.to_string_lossy();
-
-    // cmd /c "type file.txt | omp task"
-    let shell_cmd = format!(
-        "type \"{}\" | {} task",
-        file_path_str.replace('/', "\\"),
-        command
-    );
-
-    let output = Command::new("cmd")
-        .args(["/c", &shell_cmd])
+    let output = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .stdin(Stdio::null())
         .output()
-        .map_err(|e| AppError::Agent(format!("Failed to execute pipeline: {}", e)))?;
+        .map_err(|e| AppError::Agent(format!("Failed to execute omp: {}", e)))?;
 
-    process_output(output, command)
+    process_output(output)
 }
 
-fn process_output(
-    output: std::process::Output,
-    command: &str,
-) -> AppResult<ArticleResult> {
+/// omp -p --mode json "prompt"（短いプロンプト用）
+fn run_omp_direct(prompt: &str) -> AppResult<ArticleResult> {
+    let mut cmd = Command::new("omp");
+    cmd.args(["-p", "--mode", "json", prompt]);
+    hide_window(&mut cmd);
+
+    let output = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| AppError::Agent(format!("Failed to execute omp: {}", e)))?;
+
+    process_output(output)
+}
+
+#[cfg(target_os = "windows")]
+fn hide_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_window(_cmd: &mut Command) {}
+
+fn process_output(output: std::process::Output) -> AppResult<ArticleResult> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
         warn!(
-            "Agent '{}' exited with status: {:?}\nstderr: {}\nstdout: {}",
-            command,
+            "omp exit: {:?}\nstderr: {}",
             output.status.code(),
-            stderr,
-            stdout.chars().take(300).collect::<String>()
+            stderr
         );
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // --mode json の場合、OMPはJSON行を出力する。最初の { から } までを探す
     parse_agent_output(&stdout)
 }
 
-/// コマンドが実行可能か確認（which 相当）
 fn check_command_exists(command: &str) -> Result<(), String> {
-    let success = if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/c", "where", command])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+    let (cmd, args): (&str, &[&str]) = if cfg!(windows) {
+        ("cmd", &["/c", "where", command])
     } else {
-        Command::new("which")
-            .arg(command)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        ("which", &[command])
     };
 
-    if success {
-        Ok(())
-    } else {
-        Err(format!("'{}' not found on PATH", command))
-    }
+    Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| {
+            if s.success() {
+                Ok(())
+            } else {
+                Err(format!("'{}' not found on PATH", command))
+            }
+        })
+        .unwrap_or(Err(format!("Failed to check '{}'", command)))
 }
 
 fn format_feed_summary(items: &[crate::fetcher::FeedItem]) -> String {
@@ -219,11 +193,7 @@ fn format_feed_summary(items: &[crate::fetcher::FeedItem]) -> String {
             format!(
                 "- {title}{desc}\n  Link: {link}",
                 title = item.title,
-                desc = item
-                    .description
-                    .as_ref()
-                    .map(|d| format!("\n  {d}"))
-                    .unwrap_or_default(),
+                desc = item.description.as_ref().map(|d| format!("\n  {d}")).unwrap_or_default(),
                 link = item.link,
             )
         })
@@ -238,15 +208,17 @@ fn parse_agent_output(output: &str) -> AppResult<ArticleResult> {
     let json_str = match (json_start, json_end) {
         (Some(start), Some(end)) if start < end => &output[start..=end],
         _ => {
-            return Err(AppError::Agent(
-                "No JSON object found in agent output".into(),
-            ));
+            let preview = output.chars().take(300).collect::<String>();
+            return Err(AppError::Agent(format!(
+                "No JSON in omp output. Preview: {}",
+                preview
+            )));
         }
     };
 
     serde_json::from_str::<ArticleResult>(json_str).map_err(|e| {
         AppError::Agent(format!(
-            "Failed to parse agent JSON output: {}\nRaw: {}",
+            "Failed to parse JSON: {}\nRaw: {}",
             e,
             json_str.chars().take(500).collect::<String>()
         ))
@@ -258,16 +230,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_agent_json() {
-        let output = r#"{"title":"Test","content":"Body","image_url":"https://example.com/img.jpg","sources":["A"]}"#;
-        let result = parse_agent_output(output).unwrap();
-        assert_eq!(result.title, "Test");
+    fn test_parse_json() {
+        let o = r#"{"title":"T","content":"B","image_url":null,"sources":["S"]}"#;
+        let r = parse_agent_output(o).unwrap();
+        assert_eq!(r.title, "T");
     }
 
     #[test]
-    fn test_parse_agent_with_markdown_fence() {
-        let output = "```json\n{\"title\":\"T\",\"content\":\"B\",\"image_url\":null,\"sources\":[\"S\"]}\n```";
-        let result = parse_agent_output(output).unwrap();
-        assert_eq!(result.title, "T");
+    fn test_parse_json_in_markdown() {
+        let o = "```json\n{\"title\":\"T\",\"content\":\"B\",\"image_url\":null,\"sources\":[\"S\"]}\n```";
+        let r = parse_agent_output(o).unwrap();
+        assert_eq!(r.title, "T");
     }
 }
