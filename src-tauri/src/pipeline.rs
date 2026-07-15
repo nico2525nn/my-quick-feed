@@ -27,34 +27,30 @@ impl Pipeline {
     }
 
     /// 1トピックのパイプラインを実行
-    /// 1. 各ソースからフィード取得
-    /// 2. 重複排除
-    /// 3. AI処理（Agent又はDirect）
-    /// 4. Discord投稿
-    /// 5. DB更新
     pub async fn run(&self, topic: &TopicConfig) -> AppResult<()> {
-        info!("Pipeline started for topic '{}'", topic.name);
+        let tn = &topic.name;
+        info!(topic = %tn, "Pipeline started");
 
-        // Step 1: Fetch feeds from all sources
+        // Step 1: Fetch feeds
         let mut all_items: Vec<FeedItem> = Vec::new();
         for source in &topic.sources {
             let items = match source.source_type.as_str() {
                 "rss" => match fetch_feed(&source.url).await {
                     Ok(feed) => feed.items,
                     Err(e) => {
-                        error!("Failed to fetch RSS '{}': {}", source.url, e);
-                        continue; // 1ソースが落ちても続行
+                        error!(topic = %tn, "RSS fetch failed: {} — {}", source.url, e);
+                        continue;
                     }
                 },
                 "rsshub" => match fetch_rsshub(DEFAULT_RSSHUB_URL, &source.url).await {
                     Ok(feed) => feed.items,
                     Err(e) => {
-                        error!("Failed to fetch RSSHUB '{}': {}", source.url, e);
+                        error!(topic = %tn, "RSSHUB fetch failed: {} — {}", source.url, e);
                         continue;
                     }
                 },
                 other => {
-                    warn!("Unknown source type: {}", other);
+                    warn!(topic = %tn, "Unknown source type: {}", other);
                     continue;
                 }
             };
@@ -62,42 +58,29 @@ impl Pipeline {
         }
 
         if all_items.is_empty() {
-            info!("No new items found for topic '{}'", topic.name);
+            info!(topic = %tn, "No items fetched from any source");
             return Ok(());
         }
-
-        info!(
-            "Fetched {} total items for topic '{}'",
-            all_items.len(),
-            topic.name
-        );
+        info!(topic = %tn, "Fetched {} items total", all_items.len());
 
         // Step 2: Deduplicate
         let new_items: Vec<FeedItem> = all_items
             .into_iter()
-            .filter(|item| {
-                let url = &item.link;
-                match self.db.is_seen(&topic.name, url) {
-                    Ok(false) => true,
-                    Ok(true) => false,
-                    Err(e) => {
-                        warn!("DB error checking seen item: {}", e);
-                        true
-                    }
+            .filter(|item| match self.db.is_seen(tn, &item.link) {
+                Ok(false) => true,
+                Ok(true) => false,
+                Err(e) => {
+                    warn!(topic = %tn, "DB dedup check error: {}", e);
+                    true
                 }
             })
             .collect();
 
         if new_items.is_empty() {
-            info!("No new (unseen) items for topic '{}'", topic.name);
+            info!(topic = %tn, "All items already seen — nothing new");
             return Ok(());
         }
-
-        info!(
-            "{} new items to process for topic '{}'",
-            new_items.len(),
-            topic.name
-        );
+        info!(topic = %tn, "{} new items to process", new_items.len());
 
         // Step 3: AI processing
         let config = self.config_manager.get();
@@ -119,10 +102,10 @@ impl Pipeline {
                     .as_deref()
                     .unwrap_or("https://openrouter.ai/api/v1");
 
+                info!(topic = %tn, "Calling Direct API [model={}]", model);
                 call_direct_api(api_key, model, base_url, topic, &new_items).await?
             }
             _ => {
-                // Default: agent mode
                 let command = config
                     .ai
                     .agent_command
@@ -130,97 +113,69 @@ impl Pipeline {
                     .unwrap_or("omp");
                 let timeout = config.ai.agent_timeout_sec.unwrap_or(120);
 
+                info!(topic = %tn, "Running agent [cmd={}, timeout={}s]", command, timeout);
                 run_agent(command, timeout, topic, &new_items).await?
             }
         };
 
-        // Mark items as seen
+        // Mark seen
         for item in &new_items {
-            if let Err(e) = self
-                .db
-                .mark_seen(&topic.name, &item.link, Some(&item.title))
-            {
-                warn!("Failed to mark item as seen: {}", e);
+            if let Err(e) = self.db.mark_seen(tn, &item.link, Some(&item.title)) {
+                warn!(topic = %tn, "Failed to mark seen: {}", e);
             }
         }
+        info!(topic = %tn, "Article generated: \"{}\"", article_result.title);
 
-        // Step 4: Post to Discord (1 topic = 1 forum thread,追記方式)
+        // Step 4: Post to Discord
         if let Some(discord) = &self.discord {
             let discord_config = config.discord.clone();
             let image_url = article_result.image_url.as_deref();
-            let topic_name = &topic.name;
 
-            // 既存スレッドを確認
-            let existing_thread = self.db.get_topic_thread(topic_name).ok().flatten();
+            let existing_thread = self.db.get_topic_thread(tn).ok().flatten();
 
-            let discord_result = match existing_thread {
-                Some(ref thread_id) => {
-                    // 既存スレッドに追記
-                    match discord
+            let discord_result = match &existing_thread {
+                Some(thread_id) => {
+                    info!(topic = %tn, "Posting to existing thread {}", thread_id);
+                    discord
                         .post_to_thread(thread_id, &article_result.title, &article_result.content, image_url)
                         .await
-                    {
-                        Ok(message_id) => Ok((message_id, thread_id.clone())),
-                        Err(e) => Err(e),
-                    }
+                        .map(|mid| (mid, thread_id.clone()))
                 }
                 None => {
-                    // 新規スレッド作成
-                    match discord
+                    info!(topic = %tn, "Creating new forum thread");
+                    discord
                         .post_to_forum(&discord_config, &article_result.title, &article_result.content, image_url)
                         .await
-                    {
-                        Ok((message_id, thread_id)) => {
-                            // スレッドIDをDBに保存
-                            self.db.set_topic_thread(topic_name, &thread_id).ok();
-                            Ok((message_id, thread_id))
-                        }
-                        Err(e) => Err(e),
-                    }
+                        .map(|(mid, tid)| {
+                            self.db.set_topic_thread(tn, &tid).ok();
+                            (mid, tid)
+                        })
                 }
             };
 
             match discord_result {
                 Ok((message_id, thread_id)) => {
-                    // Record in DB
-                    match self.db.insert_post(
-                        topic_name,
-                        &article_result.title,
-                        &article_result.content,
-                        image_url,
-                    ) {
+                    match self.db.insert_post(tn, &article_result.title, &article_result.content, image_url) {
                         Ok(post_id) => {
-                            self.db
-                                .update_post_discord(post_id, &message_id, Some(&thread_id))
-                                .ok();
-                            info!(
-                                "Posted '{}' to thread {} (post_id: {}, message_id: {})",
-                                article_result.title, thread_id, post_id, message_id
-                            );
+                            self.db.update_post_discord(post_id, &message_id, Some(&thread_id)).ok();
+                            info!(topic = %tn, "Posted to Discord: post_id={}, thread={}", post_id, thread_id);
                         }
-                        Err(e) => error!("Failed to save post to DB: {}", e),
+                        Err(e) => error!(topic = %tn, "Failed to save post to DB: {}", e),
                     }
                 }
                 Err(e) => {
-                    error!("Failed to post to Discord: {}", e);
-                    self.db
-                        .insert_post(topic_name, &article_result.title, &article_result.content, image_url)
-                        .ok();
+                    error!(topic = %tn, "Discord post failed: {}", e);
+                    self.db.insert_post(tn, &article_result.title, &article_result.content, image_url).ok();
                 }
             }
         } else {
-            // Discord未設定でもDBに記録
             self.db
-                .insert_post(
-                    &topic.name,
-                    &article_result.title,
-                    &article_result.content,
-                    article_result.image_url.as_deref(),
-                )
+                .insert_post(tn, &article_result.title, &article_result.content, article_result.image_url.as_deref())
                 .ok();
+            info!(topic = %tn, "Saved to DB (Discord not configured)");
         }
 
-        info!("Pipeline completed for topic '{}'", topic.name);
+        info!(topic = %tn, "Pipeline completed");
         Ok(())
     }
 }

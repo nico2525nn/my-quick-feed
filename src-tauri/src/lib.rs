@@ -9,12 +9,16 @@ mod scheduler;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::LazyLock;
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
     Manager,
 };
 use tracing::{error, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 use config::{AppConfig, ConfigManager, TopicConfig};
 use db::{Database, LogEntry};
@@ -22,13 +26,83 @@ use discord::DiscordClient;
 use pipeline::Pipeline;
 use scheduler::Scheduler;
 
+/// 共有ログバッファ（tracing layer と AppState で共用）
+static LOG_BUFFER: LazyLock<Arc<parking_lot::Mutex<Vec<LogEntry>>>> =
+    LazyLock::new(|| Arc::new(parking_lot::Mutex::new(Vec::new())));
+
+/// tracing のイベントをキャプチャして LOG_BUFFER に書き込む layer
+struct LogCaptureLayer;
+
+impl<S: tracing::Subscriber> Layer<S> for LogCaptureLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let metadata = event.metadata();
+
+        // フォーマット済みメッセージを収集
+        let mut msg = String::new();
+        let mut topic = String::new();
+        let mut visitor = LogFieldVisitor {
+            message: &mut msg,
+            topic: &mut topic,
+        };
+        event.record(&mut visitor);
+
+        let entry = LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level: metadata.level().to_string(),
+            topic: if topic.is_empty() {
+                metadata.target().to_string()
+            } else {
+                topic
+            },
+            message: msg,
+        };
+
+        let mut buf = LOG_BUFFER.lock();
+        buf.push(entry);
+        if buf.len() > 1000 {
+            buf.remove(0);
+        }
+    }
+}
+
+/// イベントフィールドを収集する Visitor
+struct LogFieldVisitor<'a> {
+    message: &'a mut String,
+    topic: &'a mut String,
+}
+
+impl tracing::field::Visit for LogFieldVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        match field.name() {
+            "message" => *self.message = format!("{:?}", value).trim_matches('"').to_string(),
+            "topic" => *self.topic = format!("{:?}", value).trim_matches('"').to_string(),
+            _ => {}
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match field.name() {
+            "message" => *self.message = value.to_string(),
+            "topic" => *self.topic = value.to_string(),
+            _ => {}
+        }
+    }
+}
+
+pub fn read_logs() -> Vec<LogEntry> {
+    LOG_BUFFER.lock().clone()
+}
+
 /// アプリケーション状態
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub db: Arc<Database>,
     pub scheduler: Arc<Scheduler>,
     pub running: AtomicBool,
-    pub log_buffer: tokio::sync::Mutex<Vec<LogEntry>>,
 }
 
 /// ===== Tauri IPC Commands =====
@@ -47,7 +121,6 @@ async fn update_config(
         .config_manager
         .update(config)
         .map_err(|e| e.to_string())?;
-    // Restart scheduler
     state.scheduler.stop_all().await;
     state.scheduler.start_all().await;
     Ok(())
@@ -73,35 +146,50 @@ async fn get_posts(
     topic_id: String,
     limit: i64,
 ) -> Result<Vec<db::PostSummary>, String> {
-    state
-        .db
-        .get_posts(&topic_id, limit)
-        .map_err(|e| e.to_string())
+    if topic_id.is_empty() {
+        state.db.get_all_posts(limit).map_err(|e| e.to_string())
+    } else {
+        state.db.get_posts(&topic_id, limit).map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
 async fn refresh_topic(
     state: tauri::State<'_, AppState>,
     topic_name: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+    info!(topic = %topic_name, "Manual refresh triggered");
     state
         .scheduler
         .refresh_topic(&topic_name)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            error!(topic = %topic_name, "Refresh failed: {}", e);
+            format!("{}", e)
+        })?;
+    info!(topic = %topic_name, "Refresh completed");
+    Ok(ts)
 }
 
 #[tauri::command]
-async fn get_logs(state: tauri::State<'_, AppState>) -> Result<Vec<LogEntry>, String> {
-    let logs = state.log_buffer.lock().await;
-    Ok(logs.clone())
+async fn get_logs() -> Result<Vec<LogEntry>, String> {
+    Ok(read_logs())
 }
 
 /// ===== App Entry Point =====
 
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    // tracing subscriber: stdout + LogCaptureLayer
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_level(true);
+    let capture_layer = LogCaptureLayer;
+
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(capture_layer)
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "my_quick_feed=info".into()),
         )
@@ -112,22 +200,18 @@ pub fn run() {
         .setup(|app| {
             info!("Starting My Quick Feed...");
 
-            // Resolve data paths
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
 
-            // Config path
             let config_path = app_data_dir.join("my-quick-feed.yaml");
             let config_manager =
                 Arc::new(ConfigManager::load(config_path).expect("Failed to load config"));
 
-            // DB path
             let db_path = app_data_dir.join("my-quick-feed.db");
             let db = Arc::new(Database::new(db_path).expect("Failed to initialize database"));
 
-            // Discord client — verify in background, store regardless
             let config = config_manager.get();
             let discord = if !config.discord.token.is_empty()
                 && !config.discord.forum_channel_id.is_empty()
@@ -135,7 +219,6 @@ pub fn run() {
                 let client = DiscordClient::new(&config.discord.token);
                 let client_arc = Arc::new(client);
 
-                // Verify token in background
                 let verify_client = client_arc.clone();
                 tauri::async_runtime::spawn(async move {
                     match verify_client.verify_token().await {
@@ -147,32 +230,27 @@ pub fn run() {
                 info!("Discord client created (verification in background)");
                 Some(client_arc)
             } else {
-                info!("Discord not configured — skipping client initialization");
+                info!("Discord not configured");
                 None
             };
 
-            // Pipeline
             let pipeline = Arc::new(Pipeline::new(
                 config_manager.clone(),
                 db.clone(),
                 discord,
             ));
 
-            // Scheduler
             let scheduler = Arc::new(Scheduler::new(config_manager.clone(), pipeline.clone()));
 
-            // App state
             let state = AppState {
                 config_manager: config_manager.clone(),
                 db: db.clone(),
                 scheduler: scheduler.clone(),
                 running: AtomicBool::new(true),
-                log_buffer: tokio::sync::Mutex::new(Vec::new()),
             };
 
             app.manage(state);
 
-            // Start scheduler
             let scheduler_clone = scheduler.clone();
             tauri::async_runtime::spawn(async move {
                 scheduler_clone.start_all().await;

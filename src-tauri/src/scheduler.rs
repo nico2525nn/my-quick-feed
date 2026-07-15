@@ -23,27 +23,23 @@ impl Scheduler {
         }
     }
 
-    /// 全てのトピックのスケジューラを起動
     pub async fn start_all(&self) {
         let config = self.config_manager.get();
         let topics = config.topics.clone();
-
         for topic in &topics {
             self.start_topic(topic).await;
         }
         info!("Started {} topic schedulers", topics.len());
     }
 
-    /// 1トピックのスケジューラを起動
     pub async fn start_topic(&self, topic: &TopicConfig) {
         let mut handles = self.handles.lock().await;
-        // Stop existing handle if any
         if let Some(handle) = handles.remove(&topic.name) {
             handle.abort();
         }
 
         let topic_name = topic.name.clone();
-        let interval_min = topic.interval_min.max(1); // min 1 minute
+        let interval_min = topic.interval_min.max(1);
         let pipeline = self.pipeline.clone();
         let config_manager = self.config_manager.clone();
 
@@ -51,12 +47,8 @@ impl Scheduler {
             let mut timer = interval(std::time::Duration::from_secs(interval_min * 60));
             timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-            info!(
-                "Scheduler started for '{}' (interval: {} min)",
-                topic_name, interval_min
-            );
+            info!(topic = %topic_name, "Scheduler started [interval={}min]", interval_min);
 
-            // Run immediately on start
             Self::run_topic_pipeline(&pipeline, &config_manager, &topic_name).await;
 
             loop {
@@ -74,38 +66,32 @@ impl Scheduler {
         topic_name: &str,
     ) {
         let config = config_manager.get();
-        let topic = config.topics.iter().find(|t| t.name == topic_name);
-
-        if let Some(topic) = topic {
-            info!("Pipeline triggered for topic '{}'", topic_name);
+        if let Some(topic) = config.topics.iter().find(|t| t.name == topic_name) {
+            info!(topic = %topic_name, "Pipeline triggered");
             if let Err(e) = pipeline.run(topic).await {
-                error!("Pipeline failed for topic '{}': {}", topic_name, e);
-                // エラーが発生しても後続のトピックは続行
+                error!(topic = %topic_name, "Pipeline failed: {}", e);
             }
         } else {
-            warn!("Topic '{}' not found in config", topic_name);
+            warn!(topic = %topic_name, "Topic not found in config");
         }
     }
 
-    /// 特定トピックのスケジューラを停止
     pub async fn stop_topic(&self, topic_name: &str) {
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.remove(topic_name) {
             handle.abort();
-            info!("Scheduler stopped for topic '{}'", topic_name);
+            info!(topic = %topic_name, "Scheduler stopped");
         }
     }
 
-    /// 全て停止
     pub async fn stop_all(&self) {
         let mut handles = self.handles.lock().await;
         for (name, handle) in handles.drain() {
             handle.abort();
-            info!("Scheduler stopped for topic '{}'", name);
+            info!(topic = %name, "Scheduler stopped");
         }
     }
 
-    /// 手動リフレッシュ（即時実行）
     pub async fn refresh_topic(&self, topic_name: &str) -> AppResult<()> {
         let config = self.config_manager.get();
         let topic = config

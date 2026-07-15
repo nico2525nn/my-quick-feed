@@ -25,13 +25,19 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [recentPosts, setRecentPosts] = useState<PostSummary[]>([]);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  const showToast = (msg: string, ok: boolean) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const loadData = async () => {
     try {
       const [s, t, p] = await Promise.all([
         invoke<DashboardStats>("get_stats"),
         invoke<TopicInfo[]>("get_topics"),
-        invoke<PostSummary[]>("get_posts", { topicId: "", limit: 10 }),
+        invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 }),
       ]);
       setStats(s);
       setTopics(t);
@@ -50,18 +56,42 @@ export default function Dashboard() {
   const handleRefresh = async (topicName: string) => {
     try {
       await invoke("refresh_topic", { topic_name: topicName });
+      showToast("Refreshed: " + topicName, true);
+      setTimeout(loadData, 1500);
     } catch (e) {
-      console.error("Refresh failed", e);
+      showToast("Refresh failed: " + e, false);
     }
   };
 
   return (
-    <div className="fade-in">
+    <div className="fade-in" style={{ position: "relative" }}>
+      {/* Toast notification */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 16,
+            right: 16,
+            zIndex: 999,
+            padding: "10px 18px",
+            borderRadius: "var(--radius-sm)",
+            background: toast.ok ? "rgba(63,185,80,0.9)" : "rgba(248,81,73,0.9)",
+            color: "#fff",
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            maxWidth: 360,
+            wordBreak: "break-word",
+          }}
+        >
+          {toast.msg}
+        </div>
+      )}
+
       <div className="page-header">
         <h1>Dashboard</h1>
       </div>
       <div className="page-body">
-        {/* Stats */}
         <div className="stats-bar" style={{ marginBottom: 24 }}>
           <div className="stat-card">
             <span className="stat-icon">{"\u{1F4E1}"}</span>
@@ -86,7 +116,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Topics Overview */}
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: "var(--text-secondary)" }}>
           Topics Overview
         </h2>
@@ -117,7 +146,6 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* Recent Posts */}
         {recentPosts.length > 0 && (
           <>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginTop: 32, marginBottom: 12, color: "var(--text-secondary)" }}>
