@@ -8,6 +8,7 @@ use crate::errors::{AppError, AppResult};
 /// OMP / OpenCode CLI を子プロセスとして呼び出し、エージェントに記事生成を委託する
 pub async fn run_agent(
     command: &str,
+    model: &str,
     timeout_sec: u64,
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
@@ -33,6 +34,9 @@ pub async fn run_agent(
 ## 言語
 {language}
 
+## 使用モデル
+{model}
+
 ## システム指示
 {system_prompt}
 
@@ -50,14 +54,16 @@ pub async fn run_agent(
 "#,
         topic_name = topic.name,
         language = language,
+        model = model,
         system_prompt = system_prompt,
         feed_summary = feed_summary,
     );
 
     info!(
-        "Running agent '{}' for topic '{}' (timeout: {}s, prompt: {} chars)",
-        command, topic.name, timeout_sec, prompt.len()
+        topic = %topic.name, "Running agent '{}' [model={}, timeout={}s, prompt={}chars]",
+        command, model, timeout_sec, prompt.len()
     );
+
 
     // プロンプトが長すぎる場合はファイル経由、そうでなければ引数直接
     let result = if prompt.len() > 4000 {

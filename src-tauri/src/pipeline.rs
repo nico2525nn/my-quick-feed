@@ -111,10 +111,11 @@ impl Pipeline {
                     .agent_command
                     .as_deref()
                     .unwrap_or("omp");
+                let model = config.ai.model.as_deref().unwrap_or("default");
                 let timeout = config.ai.agent_timeout_sec.unwrap_or(120);
 
-                info!(topic = %tn, "Running agent [cmd={}, timeout={}s]", command, timeout);
-                run_agent(command, timeout, topic, &new_items).await?
+                info!(topic = %tn, "Running agent [cmd={}, model={}, timeout={}s]", command, model, timeout);
+                run_agent(command, model, timeout, topic, &new_items).await?
             }
         };
 
