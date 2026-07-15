@@ -29,6 +29,26 @@ interface AppConfig {
   topics: TopicConfig[];
 }
 
+function generateTemplatePrompt(name: string, language: string): string {
+  if (!name) return "";
+  switch (language) {
+    case "ja":
+      return `あなたは${name}に関するニュース記事をまとめるアシスタントです。
+以下の情報源から収集した情報を基に、簡潔なニュース記事を1件生成してください。
+タイトルは「【${name}】」で始め、本文は300字程度にまとめてください。
+出典を明記し、複数のソースを統合する場合はその旨も記載してください。`;
+    case "en":
+      return `You are an assistant that summarizes news about ${name}.
+Create one concise news article based on the information collected from the sources below.
+Start the title with "【${name}】" and keep the body around 300 characters.
+Cite your sources and mention when multiple sources are combined.`;
+    default:
+      return `You are an assistant that summarizes news about ${name}.
+Create one concise news article based on the information provided.
+Start the title with "【${name}】" and cite your sources.`;
+  }
+}
+
 function emptyTopic(): TopicConfig {
   return {
     name: "",
@@ -45,6 +65,20 @@ export default function TopicsPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [editing, setEditing] = useState<TopicConfig | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const [autoPrompt, setAutoPrompt] = useState(false);
+
+  // 新規トピック作成時: 名前/言語の変更に応じてプロンプトを自動生成
+  const updateEditing = (updates: Partial<TopicConfig>) => {
+    if (!editing) return;
+    const next = { ...editing, ...updates };
+    if (autoPrompt && (updates.name !== undefined || updates.language !== undefined)) {
+      const name = next.name || "";
+      const lang = next.language || "ja";
+      next.system_prompt = name ? generateTemplatePrompt(name, lang) : null;
+    }
+    setEditing(next);
+  };
+
 
   const loadConfig = async () => {
     try {
@@ -104,6 +138,7 @@ export default function TopicsPage() {
   const openNew = () => {
     setEditing(emptyTopic());
     setIsNew(true);
+    setAutoPrompt(true);
   };
 
   const openEdit = (topic: TopicConfig) => {
@@ -202,7 +237,7 @@ export default function TopicsPage() {
               <input
                 className="form-input"
                 value={editing.name}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                onChange={(e) => updateEditing({ name: e.target.value })}
                 placeholder="e.g. APEXまとめ"
               />
             </div>
@@ -213,7 +248,7 @@ export default function TopicsPage() {
                 <select
                   className="form-select"
                   value={editing.language ?? "ja"}
-                  onChange={(e) => setEditing({ ...editing, language: e.target.value })}
+                  onChange={(e) => updateEditing({ language: e.target.value })}
                 >
                   <option value="ja">Japanese</option>
                   <option value="en">English</option>
@@ -274,9 +309,10 @@ export default function TopicsPage() {
                 className="form-textarea"
                 rows={4}
                 value={editing.system_prompt ?? ""}
-                onChange={(e) =>
-                  setEditing({ ...editing, system_prompt: e.target.value || null })
-                }
+                  onChange={(e) => {
+                    setAutoPrompt(false);
+                    updateEditing({ system_prompt: e.target.value || null });
+                  }}
                 placeholder="Optional: custom system prompt for the AI agent"
               />
             </div>

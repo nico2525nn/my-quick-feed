@@ -1,8 +1,7 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tracing::{info, warn};
-
-use crate::ai::ArticleResult;
+use crate::ai::{ArticleResult, resolve_system_prompt};
 use crate::config::TopicConfig;
 use crate::errors::{AppError, AppResult};
 
@@ -15,10 +14,7 @@ pub async fn run_agent(
 ) -> AppResult<ArticleResult> {
     let feed_summary = format_feed_summary(feed_items);
     let language = topic.language.as_deref().unwrap_or("ja");
-    let system_prompt = topic
-        .system_prompt
-        .as_deref()
-        .unwrap_or(DEFAULT_SYSTEM_PROMPT);
+    let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
 
     let prompt = format!(
         r#"あなたはニュース記事を生成するアシスタントです。
@@ -132,11 +128,6 @@ fn parse_agent_output(output: &str) -> AppResult<ArticleResult> {
         ))
     })
 }
-
-const DEFAULT_SYSTEM_PROMPT: &str =
-    "与えられた情報源から収集した情報を基に、簡潔なニュース記事を生成してください。\
-     出典を明記し、複数のソースを統合する場合はその旨も記載してください。";
-
 #[cfg(test)]
 mod tests {
     use super::*;

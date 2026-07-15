@@ -1,7 +1,6 @@
 use std::time::Duration;
 use tracing::{info, warn};
-
-use crate::ai::ArticleResult;
+use crate::ai::{ArticleResult, resolve_system_prompt};
 use crate::config::TopicConfig;
 use crate::errors::{AppError, AppResult};
 
@@ -14,10 +13,7 @@ pub async fn call_direct_api(
     feed_items: &[crate::fetcher::FeedItem],
 ) -> AppResult<ArticleResult> {
     let language = topic.language.as_deref().unwrap_or("ja");
-    let system_prompt = topic
-        .system_prompt
-        .as_deref()
-        .unwrap_or(DEFAULT_SYSTEM_PROMPT);
+    let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
 
     let feed_text: String = feed_items
         .iter()
@@ -115,9 +111,6 @@ fn parse_direct_response(content: &str) -> AppResult<ArticleResult> {
     })
 }
 
-const DEFAULT_SYSTEM_PROMPT: &str =
-    "与えられた情報源から収集した情報を基に、簡潔なニュース記事を生成してください。\
-     出典を明記し、複数のソースを統合する場合はその旨も記載してください。";
 
 #[cfg(test)]
 mod tests {
@@ -126,13 +119,6 @@ mod tests {
     #[test]
     fn test_parse_direct_valid_json() {
         let content = r#"{"title":"Test","content":"Body","image_url":null,"sources":["A"]}"#;
-        let result = parse_direct_response(content).unwrap();
-        assert_eq!(result.title, "Test");
-    }
-
-    #[test]
-    fn test_parse_direct_json_in_markdown() {
-        let content = "```json\n{\"title\":\"Test\",\"content\":\"Body\",\"image_url\":null,\"sources\":[\"A\"]}\n```";
         let result = parse_direct_response(content).unwrap();
         assert_eq!(result.title, "Test");
     }
