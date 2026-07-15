@@ -33,17 +33,26 @@ export default function Dashboard() {
   };
 
   const loadData = async () => {
+    // 各データを独立に取得（1つが失敗しても他は表示する）
     try {
-      const [s, t, p] = await Promise.all([
-        invoke<DashboardStats>("get_stats"),
-        invoke<TopicInfo[]>("get_topics"),
-        invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 }),
-      ]);
+      const s = await invoke<DashboardStats>("get_stats");
       setStats(s);
+    } catch (e) {
+      console.error("get_stats failed", e);
+    }
+
+    try {
+      const t = await invoke<TopicInfo[]>("get_topics");
       setTopics(t);
+    } catch (e) {
+      console.error("get_topics failed", e);
+    }
+
+    try {
+      const p = await invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 });
       setRecentPosts(p);
     } catch (e) {
-      console.error("Failed to load dashboard data", e);
+      console.error("get_posts failed", e);
     }
   };
 

@@ -6,7 +6,7 @@ pub use direct::*;
 
 use serde::{Deserialize, Serialize};
 
-/// Agent/Direct モード共通の生成結果
+/// 1件の記事
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleResult {
     pub title: String,
@@ -15,8 +15,13 @@ pub struct ArticleResult {
     pub sources: Vec<String>,
 }
 
+/// 記事リスト（AIが複数記事を返す用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArticleListResult {
+    pub articles: Vec<ArticleResult>,
+}
+
 /// トピック名を使ってデフォルトのシステムプロンプトを生成
-/// `custom_prompt` が Some かつ空でなければそれを優先
 pub fn resolve_system_prompt(topic_name: &str, language: &str, custom_prompt: Option<&str>) -> String {
     match custom_prompt {
         Some(p) if !p.trim().is_empty() => p.to_string(),
@@ -24,7 +29,6 @@ pub fn resolve_system_prompt(topic_name: &str, language: &str, custom_prompt: Op
     }
 }
 
-/// トピック名と言語からテンプレートプロンプトを生成
 fn generate_default_prompt(topic_name: &str, language: &str) -> String {
     match language {
         "ja" => format!(
