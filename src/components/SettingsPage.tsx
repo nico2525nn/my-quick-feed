@@ -147,7 +147,7 @@ export default function SettingsPage() {
               <label>Model</label>
               <input
                 className="form-input"
-                value={config.ai.model ?? "gpt-4o-mini"}
+                value={config.ai.model ?? ""}
                 onChange={(e) =>
                   setConfig({
                     ...config,
@@ -162,7 +162,7 @@ export default function SettingsPage() {
                 <label>Provider</label>
                 <input
                   className="form-input"
-                  value={config.ai.base_url ?? "https://openrouter.ai/api/v1"}
+                  value={config.ai.base_url ?? ""}
                   onChange={(e) =>
                     setConfig({
                       ...config,
