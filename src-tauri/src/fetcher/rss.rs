@@ -32,16 +32,40 @@ pub async fn fetch_feed(url: &str) -> AppResult<Feed> {
 }
 
 pub fn parse_feed(xml: &str) -> AppResult<Feed> {
-    let trimmed = xml.trim();
+    // BOM除去
+    let cleaned = xml.trim_start_matches('\u{feff}').trim_start_matches('\u{fffe}');
+    // XML宣言とDOCTYPEを除去
+    let cleaned = strip_xml_header(cleaned);
+    let trimmed = cleaned.trim();
+
     if trimmed.starts_with("<rss") {
-        parse_rss2(xml)
+        parse_rss2(cleaned)
     } else if trimmed.starts_with("<feed") {
-        parse_atom(xml)
+        parse_atom(cleaned)
     } else {
-        Err(AppError::RssParse(
-            "Unknown feed format: must start with <rss or <feed".into(),
-        ))
+        let preview: String = trimmed.chars().take(200).collect();
+        Err(AppError::RssParse(format!(
+            "Unknown feed format (preview): {}",
+            preview
+        )))
     }
+}
+
+/// XML宣言 <?xml ... ?> と DOCTYPE を削除
+fn strip_xml_header(s: &str) -> &str {
+    let s = s.trim_start();
+    if s.starts_with("<?xml") {
+        if let Some(end) = s.find("?>") {
+            let after = s[end + 2..].trim_start();
+            if after.starts_with("<!DOCTYPE") {
+                if let Some(doc_end) = after.find(">") {
+                    return after[doc_end + 1..].trim_start();
+                }
+            }
+            return after;
+        }
+    }
+    s
 }
 
 fn parse_rss2(xml: &str) -> AppResult<Feed> {
