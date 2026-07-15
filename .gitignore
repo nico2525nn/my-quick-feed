@@ -1,0 +1,28 @@
+# Rust
+src-tauri/target/
+*.rs.bk
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+
+# Environment
+.env
+.env.local
