@@ -142,6 +142,22 @@ export default function SettingsPage() {
               </select>
             </div>
 
+            {/* Model — 両モード対応 */}
+            <div className="form-group">
+              <label>Model</label>
+              <input
+                className="form-input"
+                value={config.ai.model ?? "gpt-4o-mini"}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    ai: { ...config.ai, model: e.target.value },
+                  })
+                }
+                placeholder="gpt-4o-mini"
+              />
+            </div>
+
             {config.ai.mode === "agent" && (
               <>
                 <div className="form-group">
