@@ -144,33 +144,58 @@ impl Pipeline {
             }
         }
 
-        // Step 4: Post to Discord
+        // Step 4: Post to Discord (1 topic = 1 forum thread,追記方式)
         if let Some(discord) = &self.discord {
             let discord_config = config.discord.clone();
             let image_url = article_result.image_url.as_deref();
+            let topic_name = &topic.name;
 
-            match discord
-                .post_to_forum(&discord_config, &article_result.title, &article_result.content, image_url)
-                .await
-            {
+            // 既存スレッドを確認
+            let existing_thread = self.db.get_topic_thread(topic_name).ok().flatten();
+
+            let discord_result = match existing_thread {
+                Some(ref thread_id) => {
+                    // 既存スレッドに追記
+                    match discord
+                        .post_to_thread(thread_id, &article_result.title, &article_result.content, image_url)
+                        .await
+                    {
+                        Ok(message_id) => Ok((message_id, thread_id.clone())),
+                        Err(e) => Err(e),
+                    }
+                }
+                None => {
+                    // 新規スレッド作成
+                    match discord
+                        .post_to_forum(&discord_config, &article_result.title, &article_result.content, image_url)
+                        .await
+                    {
+                        Ok((message_id, thread_id)) => {
+                            // スレッドIDをDBに保存
+                            self.db.set_topic_thread(topic_name, &thread_id).ok();
+                            Ok((message_id, thread_id))
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            };
+
+            match discord_result {
                 Ok((message_id, thread_id)) => {
-                    // Step 5: Record in DB
+                    // Record in DB
                     match self.db.insert_post(
-                        &topic.name,
+                        topic_name,
                         &article_result.title,
                         &article_result.content,
                         image_url,
                     ) {
                         Ok(post_id) => {
-                            if let Err(e) = self
-                                .db
-                                .update_post_discord(post_id, &message_id, thread_id.as_deref())
-                            {
-                                warn!("Failed to update post with Discord IDs: {}", e);
-                            }
+                            self.db
+                                .update_post_discord(post_id, &message_id, Some(&thread_id))
+                                .ok();
                             info!(
-                                "Posted article '{}' to Discord (post_id: {}, message_id: {})",
-                                article_result.title, post_id, message_id
+                                "Posted '{}' to thread {} (post_id: {}, message_id: {})",
+                                article_result.title, thread_id, post_id, message_id
                             );
                         }
                         Err(e) => error!("Failed to save post to DB: {}", e),
@@ -178,14 +203,8 @@ impl Pipeline {
                 }
                 Err(e) => {
                     error!("Failed to post to Discord: {}", e);
-                    // エラーでもDBに記録
                     self.db
-                        .insert_post(
-                            &topic.name,
-                            &article_result.title,
-                            &article_result.content,
-                            image_url,
-                        )
+                        .insert_post(topic_name, &article_result.title, &article_result.content, image_url)
                         .ok();
                 }
             }

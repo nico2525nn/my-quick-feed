@@ -17,7 +17,7 @@ impl DiscordClient {
         }
     }
 
-    /// トークンの検証（起動時チェック用）
+    /// トークンの検証
     pub async fn verify_token(&self) -> AppResult<()> {
         let resp = self
             .http_client
@@ -42,50 +42,33 @@ impl DiscordClient {
         }
     }
 
-    /// フォーラムチャンネルにスレッドを作成し、記事を投稿する
-    /// 戻り値: (message_id, option(thread_id))
+    /// フォーラムに新規スレッドを作成し、最初の記事を投稿する
+    /// 戻り値: (message_id, thread_id)
     pub async fn post_to_forum(
         &self,
         config: &DiscordConfig,
         title: &str,
         content: &str,
         image_url: Option<&str>,
-    ) -> AppResult<(String, Option<String>)> {
-        // API v10 ベースURL
+    ) -> AppResult<(String, String)> {
         let base = "https://discord.com/api/v10";
-        let headers = vec![
-            ("Authorization", format!("Bot {}", self.token)),
-            ("Content-Type", "application/json".to_string()),
-            ("User-Agent", "MyQuickFeed/0.1".to_string()),
-        ];
+        let thread_url = format!("{}/channels/{}/threads", base, config.forum_channel_id);
 
-        let apply_headers = |req: reqwest::RequestBuilder| -> reqwest::RequestBuilder {
-            let mut r = req;
-            for (k, v) in &headers {
-                r = r.header(*k, &v[..]);
-            }
-            r
-        };
-
-        // Step 1: フォーラムスレッドを作成
-        let create_thread_body = serde_json::json!({
+        let body = serde_json::json!({
             "name": title,
             "message": {
                 "content": "",
-                "embeds": [{
-                    "title": title,
-                    "description": content,
-                    "color": 0x58a6ff,
-                    "image": image_url
-                        .filter(|u| !u.is_empty())
-                        .map(|u| serde_json::json!({"url": u})),
-                }]
+                "embeds": [make_embed(title, content, image_url)]
             }
         });
 
-        let thread_url = format!("{}/channels/{}/threads", base, config.forum_channel_id);
-        let resp = apply_headers(self.http_client.post(&thread_url))
-            .json(&create_thread_body)
+        let resp = self
+            .http_client
+            .post(&thread_url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "MyQuickFeed/0.1")
+            .json(&body)
             .send()
             .await
             .map_err(|e| AppError::Discord(format!("HTTP request failed: {}", e)))?;
@@ -102,16 +85,71 @@ impl DiscordClient {
         let data: serde_json::Value = resp.json().await?;
         let thread_id = data["id"]
             .as_str()
-            .ok_or_else(|| AppError::Discord("No thread id in response".into()))?;
+            .ok_or_else(|| AppError::Discord("No thread id in response".into()))?
+            .to_string();
         let message_id = data["message"]["id"]
             .as_str()
-            .ok_or_else(|| AppError::Discord("No message id in response".into()))?;
+            .ok_or_else(|| AppError::Discord("No message id in response".into()))?
+            .to_string();
 
-        info!(
-            "Created forum thread: {} (thread: {}, message: {})",
-            title, thread_id, message_id
-        );
-
-        Ok((message_id.to_string(), Some(thread_id.to_string())))
+        info!("Created thread {} with message {}", thread_id, message_id);
+        Ok((message_id, thread_id))
     }
+
+    /// 既存のフォーラムスレッドにメッセージとして追記する
+    pub async fn post_to_thread(
+        &self,
+        thread_id: &str,
+        title: &str,
+        content: &str,
+        image_url: Option<&str>,
+    ) -> AppResult<String> {
+        let base = "https://discord.com/api/v10";
+        let msg_url = format!("{}/channels/{}/messages", base, thread_id);
+
+        let body = serde_json::json!({
+            "embeds": [make_embed(title, content, image_url)]
+        });
+
+        let resp = self
+            .http_client
+            .post(&msg_url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "MyQuickFeed/0.1")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::Discord(format!("HTTP request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(AppError::Discord(format!(
+                "Failed to post to thread ({}): {}",
+                status, text
+            )));
+        }
+
+        let data: serde_json::Value = resp.json().await?;
+        let message_id = data["id"]
+            .as_str()
+            .ok_or_else(|| AppError::Discord("No message id in response".into()))?
+            .to_string();
+
+        info!("Posted to thread {}: message_id={}", thread_id, message_id);
+        Ok(message_id)
+    }
+}
+
+/// Embed 構造体を生成（共通）
+fn make_embed(title: &str, content: &str, image_url: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "title": title,
+        "description": content,
+        "color": 0x58a6ff,
+        "image": image_url
+            .filter(|u| !u.is_empty())
+            .map(|u| serde_json::json!({"url": u})),
+    })
 }

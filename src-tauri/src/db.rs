@@ -96,6 +96,11 @@ impl Database {
                 user_id     TEXT NOT NULL,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS topic_threads (
+                topic_id    TEXT PRIMARY KEY,
+                thread_id   TEXT NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
 
             CREATE INDEX IF NOT EXISTS idx_seen_items_topic ON seen_items(topic_id, source_url);
             CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id);
@@ -113,6 +118,29 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    pub fn get_topic_thread(&self, topic_id: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock();
+        let result = conn.query_row(
+            "SELECT thread_id FROM topic_threads WHERE topic_id = ?1",
+            params![topic_id],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(thread_id) => Ok(Some(thread_id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_topic_thread(&self, topic_id: &str, thread_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO topic_threads (topic_id, thread_id) VALUES (?1, ?2)",
+            params![topic_id, thread_id],
+        )?;
+        Ok(())
     }
 
     pub fn mark_seen(
