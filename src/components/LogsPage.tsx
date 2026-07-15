@@ -11,6 +11,7 @@ interface LogEntry {
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("ALL");
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const loadLogs = async () => {
@@ -22,13 +23,23 @@ export default function LogsPage() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const path = await invoke<string>("export_logs");
+      setExportMsg("Saved: " + path);
+      setTimeout(() => setExportMsg(null), 5000);
+    } catch (e) {
+      setExportMsg("Export failed: " + e);
+      setTimeout(() => setExportMsg(null), 5000);
+    }
+  };
+
   useEffect(() => {
     loadLogs();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-scroll to bottom on new logs
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
@@ -40,14 +51,10 @@ export default function LogsPage() {
 
   const levelClass = (level: string) => {
     switch (level) {
-      case "INFO":
-        return "INFO";
-      case "WARN":
-        return "WARN";
-      case "ERROR":
-        return "ERROR";
-      default:
-        return "INFO";
+      case "INFO": return "INFO";
+      case "WARN": return "WARN";
+      case "ERROR": return "ERROR";
+      default: return "INFO";
     }
   };
 
@@ -55,7 +62,11 @@ export default function LogsPage() {
     <div className="fade-in">
       <div className="page-header">
         <h1>Logs</h1>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="btn btn-sm" onClick={handleExport}>
+            Export
+          </button>
+          <div style={{ width: 1, height: 20, background: "var(--border-color)" }} />
           {["ALL", "INFO", "WARN", "ERROR"].map((l) => (
             <button
               key={l}
@@ -68,6 +79,25 @@ export default function LogsPage() {
         </div>
       </div>
       <div className="page-body">
+        {exportMsg && (
+          <div
+            style={{
+              padding: "8px 14px",
+              marginBottom: 12,
+              borderRadius: "var(--radius-sm)",
+              fontSize: 12,
+              background: exportMsg.startsWith("Saved")
+                ? "rgba(63,185,80,0.15)"
+                : "rgba(248,81,73,0.15)",
+              color: exportMsg.startsWith("Saved")
+                ? "var(--accent-green)"
+                : "var(--accent-red)",
+              wordBreak: "break-all",
+            }}
+          >
+            {exportMsg}
+          </div>
+        )}
         <div className="log-container" ref={containerRef}>
           {filteredLogs.length === 0 && (
             <div style={{ color: "var(--text-muted)", textAlign: "center", paddingTop: 40 }}>

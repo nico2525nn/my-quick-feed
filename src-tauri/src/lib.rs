@@ -9,6 +9,7 @@ mod scheduler;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
@@ -103,6 +104,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub scheduler: Arc<Scheduler>,
     pub running: AtomicBool,
+    pub log_dir: PathBuf,
 }
 
 /// ===== Tauri IPC Commands =====
@@ -177,6 +179,30 @@ async fn get_logs() -> Result<Vec<LogEntry>, String> {
     Ok(read_logs())
 }
 
+
+#[tauri::command]
+async fn export_logs(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let logs = read_logs();
+    if logs.is_empty() {
+        return Err("No logs to export".into());
+    }
+
+    std::fs::create_dir_all(&state.log_dir).map_err(|e| e.to_string())?;
+
+    let filename = format!("mqf_{}.log", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    let path = state.log_dir.join(&filename);
+
+    let mut content = String::new();
+    for entry in &logs {
+        content.push_str(&format!(
+            "[{}] [{}] [{}] {}\n",
+            entry.timestamp, entry.level, entry.topic, entry.message
+        ));
+    }
+
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
 /// ===== App Entry Point =====
 
 pub fn run() {
@@ -247,6 +273,7 @@ pub fn run() {
                 db: db.clone(),
                 scheduler: scheduler.clone(),
                 running: AtomicBool::new(true),
+                log_dir: app_data_dir.join("logs"),
             };
 
             app.manage(state);
@@ -290,6 +317,7 @@ pub fn run() {
             get_posts,
             refresh_topic,
             get_logs,
+            export_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
