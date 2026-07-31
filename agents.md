@@ -54,7 +54,13 @@ cargo build --release
 
 **`--exclude-all-symbols` がないと MinGW の ld が「export ordinal too large」でリンクに失敗する**（PEフォーマットの制限）。絶対に消さないこと。
 
-### 2.4 起動スクリプト
+### 2.5 開発時の環境トラップ（実測済み）
+
+- **埋め込みシェルでは `cd` が効かない**。`cmd /c "cd /d C:\quickfeed && ..."` を実行しても、カレントディレクトリが `D:\学校\app\my-quick-feed` のままになる。**必ずツールの cwd パラメータで `C:\quickfeed` を指定すること**。指定しないと日本語パス側でビルドされ、node_modules 不足やリンカエラーが起きる。
+- **cargo test は実行できない**（MinGW リンカの制約）。`--exclude-all-symbols` を付けるとテストバイナリが起動時 0xc0000139 でクラッシュ、外すと「export ordinal too large」でリンク失敗。テストは `cargo check` + ブラウザ検証で代替する。
+- パス区切りと `%` のエスケープに注意。PowerShell の変数展開も埋め込みシェルで壊れるため、複雑な処理は .ps1/.cmd ファイルに書いて実行する。
+
+### 2.6 起動スクリプト
 
 - `run.bat` — フロントエンド→バックエンドを毎回ビルドして起動
 - `dev.bat` — `npx tauri dev`（ホットリロード）
@@ -103,10 +109,16 @@ OMP は `-p` モードでも JSONL（セッションプロトコル）を出力�
 ### 3.4 モデル指定
 
 ```
-omp -p --model deepseek-v4-flash @prompt.txt   ← --model で指定可
+omp -p --model mimo-v2.5 @prompt.txt   ← --model で指定可
 ```
 
 YAML の `ai.model` をプロンプト内の「## 使用モデル」にも書いておくと、エージェントが従う。
+
+**デフォルトモデルは `mimo-v2.5`（provider: `opencode-go`）固定**。コード内のデフォルト文字列は全てこの値にすること（`gpt-4o-mini` 等の古いデフォルトを残さない）。
+
+### 3.5 OMP 実動作確認（2026-07-15）
+
+`omp -p @prompt.txt` は 8〜9 秒で JSON 配列を直接返すことを確認済み。stderr に `Working...` のプログレスが出るが、stdout には JSON のみ。パース戦略1（直接 `Vec<ArticleResult>` としてパース）で十分。
 
 ---
 
