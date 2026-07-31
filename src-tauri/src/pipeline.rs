@@ -62,14 +62,14 @@ impl Pipeline {
             "direct" => {
                 let api_key = config.ai.api_key.as_deref()
                     .ok_or_else(|| AppError::Config("API key not configured".into()))?;
-                let model = config.ai.model.as_deref().unwrap_or("gpt-4o-mini");
+                let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
                 let base_url = config.ai.base_url.as_deref().unwrap_or("https://openrouter.ai/api/v1");
                 info!(topic = %tn, "Direct API [model={}]", model);
                 call_direct_api(api_key, model, base_url, topic, &new_items).await.map(|a| vec![a])?
             }
             _ => {
                 let cmd = config.ai.agent_command.as_deref().unwrap_or("omp");
-                let model = config.ai.model.as_deref().unwrap_or("default");
+                let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
                 let timeout = config.ai.agent_timeout_sec.unwrap_or(120);
                 info!(topic = %tn, "Agent [cmd={}, model={}, timeout={}s]", cmd, model, timeout);
                 run_agent(cmd, model, timeout, topic, &new_items).await?

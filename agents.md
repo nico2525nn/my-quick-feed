@@ -261,10 +261,12 @@ topics:
 
 ---
 
-## 9. 検証手順
+## 9. 検証手順（ユーザー指示: アプリを立ち上げない）
+
+**重要**: ユーザーから「動作テストにはアプリを立ち上げず、バックエンドとWebブラウザでbrowserツールを使って詳細にテストすること」と指示されている。
 
 ```bat
-:: 1. フロントエンド
+:: 1. フロントエンド（型チェック + ビルド）
 cd C:\quickfeed
 npx tsc --noEmit          :: TSエラーなし
 npx vite build            :: ビルド成功
@@ -273,18 +275,30 @@ npx vite build            :: ビルド成功
 cd C:\quickfeed\src-tauri
 set PATH=C:\msys64\mingw64\bin;%PATH%
 cargo check               :: エラーなし
-cargo build --release     :: リンク成功
-
-:: 3. 起動
-cd C:\quickfeed
-run.bat
-
-:: 4. 動作確認
-::  - Dashboard にトピックが表示される
-::  - Settings がスクロールできる
-::  - Logs にパイプラインログが出る
-::  - Export でログファイルが保存される
 ```
+
+:: 3. フロントエンドの動作確認（Tauriなし・ブラウザのみ）
+::    vite preview で配信して browser ツールで操作・検証する
+cd C:\quickfeed
+npx vite preview --port 5173 --host 127.0.0.1
+::    → browser ツールで http://127.0.0.1:5173 を開き、各ページを確認
+::    ※ Tauri IPC (invoke) は動かないため、Dashboard/Settings は Loading 表示になる。
+::       これは想定内。画面遷移・UIレイアウト・CSSの確認に使う。
+
+:: 4. バックエンドの動作確認（Rust 単体テスト + ログ確認）
+::    cargo test でユニットテスト実行
+cd C:\quickfeed\src-tauri
+set PATH=C:\msys64\mingw64\bin;%PATH%
+cargo test
+
+:: 5. 実アプリ動作確認はユーザーが run.bat で実施する（開発者は起動しない）
+```
+
+### ブラウザテストのポイント
+
+- `vite preview` で配信 → browser ツールで `tab.observe()` / `tab.screenshot()` を使って各画面を検証
+- image-descriptor サブエージェントにスクリーンショットを解析させる（ユーザー指定）
+- Tauri IPC が無い環境では invoke が失敗するため、**エラーがコンソールに出ても致命的ではない**（フォールバック表示を確認する）
 
 ---
 
@@ -294,3 +308,5 @@ run.bat
 - 動作確認には `image-descriptor` サブエージェントを使う（ユーザー指定）。
 - ユーザーのDiscordトークン・APIキーが設定ファイルに入っている。絶対に外部に漏らさない。
 - ビルドのたびに「古いバイナリが動いている」問題が発生した。**フロントエンド変更後は必ず `vite build` → バイナリ再ビルドの順で行い、バイナリのタイムスタンプを確認すること。**
+- モデル初期設定は `mimo-v2.5`（provider: `opencode-go`）。コード内のデフォルト文字列も全てこの値にすること（`gpt-4o-mini` 等の古いデフォルトを残さない）。
+- 最初からTauriを使わず、Webブラウザ上で全機能が動作することを確認してからTauriで仕上げる（specの「開発方法」セクションに明記）。

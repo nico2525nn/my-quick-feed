@@ -18,6 +18,7 @@ pub struct AiConfig {
     pub agent_timeout_sec: Option<u64>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub provider: Option<String>,
     pub base_url: Option<String>,
 }
 
@@ -81,7 +82,8 @@ impl Default for AppConfig {
                 agent_command: Some("omp".to_string()),
                 agent_timeout_sec: Some(120),
                 api_key: None,
-                model: None,
+                model: Some("mimo-v2.5".to_string()),
+                provider: Some("opencode-go".to_string()),
                 base_url: None,
             },
             topics: vec![],

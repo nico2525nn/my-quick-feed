@@ -3,12 +3,12 @@ discord:
   forum_channel_id: ""
 
 ai:
-  mode: "agent"                       # "agent"(v1) | "direct"(v2)
-  agent_command: "omp"                # "omp" | "opencode"
-  agent_timeout_sec: 120
-  # api_key: "sk-or-xxxxx"
-  # model: "openai/gpt-4o-mini"
-  # base_url: "https://openrouter.ai/api/v1"
+  mode: "agent"
+  agent_command: "omp"
+  agent_timeout_sec: 180
+  model: "mimo-v2.5"
+  provider: "opencode-go"
+  # api_key: "sk-xxxxx"
 
 topics:
   - name: "APEXまとめ"
@@ -18,11 +18,18 @@ topics:
       - type: "rss"
         url: "https://apexlegends-leaksnews.com/feed"
       - type: "rsshub"
-        url: "twitter/user/PlayApex"
+        url: "https://rsshub.app/twitter/user/PlayApex"
     system_prompt: |
-      あなたはAPEX Legendsのニュースをまとめるアシスタントです。
-      以下の情報源から収集した情報を基に、簡潔なニュース記事を1件生成してください。
-      タイトルは「【APEX】」で始め、本文は300字程度にまとめてください。
-      出典を明記し、複数のソースを統合する場合はその旨も記載してください。
+      あなたはニュースをまとめるアシスタントです。掲示板スレッドのように書いてください。
+
+      ## 基本ルール
+      - タイトルは「【APEX】」で始め、中身が一目でわかるように
+      - 文体は常体（である調）。ですます調は使わない
+      - 段落は短く区切り、空行を入れて読みやすく
+      - 複数の情報源がある場合は番号付きで整理（**1: 出典** の形式）
+      - スレッド形式で、目安8コメント程度の会話調で
+      - 出典は末尾に📡で明記
+      - 各記事に2〜4個のタグを付ける（例: 競技シーン / バグ・不具合 / コラボ・イベント / パッチノート / コミュニティ / 攻略・Tips / スキン・コスメ / プロシーン）
+      - 全体で300字程度
     image_search_enabled: true
     research_enabled: true

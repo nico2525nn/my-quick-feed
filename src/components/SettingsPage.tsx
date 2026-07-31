@@ -12,6 +12,7 @@ interface AppConfig {
     agent_timeout_sec: number | null;
     api_key: string | null;
     model: string | null;
+    provider: string | null;
     base_url: string | null;
   };
   topics: unknown[];
@@ -154,7 +155,7 @@ export default function SettingsPage() {
                     ai: { ...config.ai, model: e.target.value },
                   })
                 }
-                placeholder="gpt-4o-mini"
+                placeholder="mimo-v2.5"
               />
             </div>
             <div className="form-row">
