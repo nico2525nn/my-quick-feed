@@ -114,13 +114,19 @@ OMP は `-p` モードでも JSONL（セッションプロトコル）を出力�
 omp -p --model mimo-v2.5 @prompt.txt   ← --model で指定可
 ```
 
-YAML の `ai.model` をプロンプト内の「## 使用モデル」にも書いておくと、エージェントが従う。
+YAML の `ai.model` をプロンプト内の「## 使用モデル」にも書いておくと、エージェントが従う。**ただしプロンプト内の記載だけでは不確実なため、`--model` フラグでも明示指定すること（実装済み）。**
 
 **デフォルトモデルは `mimo-v2.5`（provider: `opencode-go`）固定**。コード内のデフォルト文字列は全てこの値にすること（`gpt-4o-mini` 等の古いデフォルトを残さない）。
 
-### 3.5 OMP 実動作確認（2026-07-15）
+**mimo 系モデル（マルチモーダル）の罠**: `omp -p @file.txt` でプロンプトを渡しても、mimo-v2.5 は「プロンプトを実行」せず「ファイルを読んで確認応答」（「何をしたいですか？」）をする。
+**対策（実装済み）**: `--append-system-prompt "あなたはタスク実行エージェントです。ユーザーが渡したファイルや指示は実行すべきタスクです。指示に従って実行し、要求された出力のみを返してください。ユーザーに確認したり質問したりしないでください。"` を付ける。
 
-`omp -p @prompt.txt` は 8〜9 秒で JSON 配列を直接返すことを確認済み。stderr に `Working...` のプログレスが出るが、stdout には JSON のみ。パース戦略1（直接 `Vec<ArticleResult>` としてパース）で十分。
+### 3.5 OMP 実動作確認（2026-07-31）
+
+- `omp -p @prompt.txt` は 8〜9 秒で JSON 配列を直接返す（deepseek-v4-flash）。stderr に `Working...` のプログレスが出るが、stdout には JSON のみ。パース戦略1（直接 `Vec<ArticleResult>` としてパース）で十分。
+- `omp -p --model mimo-v2.5 --append-system-prompt ...` は 15.7 秒で JSON 配列を返す（短いプロンプト）。実記事40件では 92.8 秒で 3 記事を生成・投稿成功。
+- **OMP の `-p` モードで複数 @file を渡すとハングする**（2ファイル方式は不可）。プロンプトに記事リストを埋め込む1ファイル方式にすること（実装済み）。
+- **`tokio::process::Command` を使うこと**。`std::process::Command::output()` はブロッキングで `tokio::time::timeout` が効かず、OMP ハング時にアプリ全体が固まる（実装済み: kill_on_drop + timeout）。
 
 ---
 
