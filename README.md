@@ -113,4 +113,4 @@ my-quick-feed/
 
 ## ライセンス
 
-未定
+[MIT](LICENSE)
