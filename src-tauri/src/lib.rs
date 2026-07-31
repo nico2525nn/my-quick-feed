@@ -202,6 +202,30 @@ async fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+struct AppStatus {
+    running: bool,
+    /// トピック名 → 次回実行予定時刻（ISO8601、実行なしは null）
+    topic_next_fetch: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+async fn get_status(state: tauri::State<'_, AppState>) -> Result<AppStatus, String> {
+    let running = state.running.load(std::sync::atomic::Ordering::SeqCst);
+    let next_runs = state.scheduler.get_next_runs();
+    let topic_next_fetch = next_runs
+        .into_iter()
+        .map(|(k, v)| (k, v.to_rfc3339()))
+        .collect();
+    Ok(AppStatus { running, topic_next_fetch })
+}
+
+#[tauri::command]
+async fn clear_logs() -> Result<(), String> {
+    LOG_BUFFER.lock().clear();
+    Ok(())
+}
+
 
 #[tauri::command]
 async fn export_logs(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -356,6 +380,8 @@ pub fn run() {
             export_logs,
             set_autostart,
             get_autostart,
+            get_status,
+            clear_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

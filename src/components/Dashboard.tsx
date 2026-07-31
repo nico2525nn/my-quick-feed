@@ -20,6 +20,11 @@ interface TopicStat {
   last_post_at: string | null;
 }
 
+interface AppStatus {
+  running: boolean;
+  topic_next_fetch: Record<string, string>;
+}
+
 interface PostSummary {
   id: number;
   topic_id: string;
@@ -31,6 +36,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [topics, setTopics] = useState<TopicInfo[]>([]);
   const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
+  const [status, setStatus] = useState<AppStatus | null>(null);
   const [recentPosts, setRecentPosts] = useState<PostSummary[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -63,6 +69,13 @@ export default function Dashboard() {
     }
 
     try {
+      const st = await invoke<AppStatus>("get_status");
+      setStatus(st);
+    } catch (e) {
+      console.error("get_status failed", e);
+    }
+
+    try {
       const p = await invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 });
       setRecentPosts(p);
     } catch (e) {
@@ -72,7 +85,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 15000);
+    const interval = setInterval(loadData, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -88,14 +101,25 @@ export default function Dashboard() {
 
   const statFor = (name: string) => topicStats.find((s) => s.topic_id === name);
 
-  const fmtTime = (iso: string | null | undefined) => {
+  const fmtRelative = (iso: string | null | undefined) => {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return null;
+    const diffSec = Math.round((t - Date.now()) / 1000);
+    if (diffSec <= 0) return "now";
+    if (diffSec < 60) return `${diffSec}s`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`;
+    return `${Math.floor(diffSec / 86400)}d`;
+  };
+
+  const fmtLastTime = (iso: string | null | undefined) => {
     if (!iso) return "never";
-    return new Date(iso + "Z").toLocaleString("ja-JP", {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const diffSec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return `${Math.floor(diffSec / 86400)}d ago`;
   };
 
   return (
@@ -125,6 +149,10 @@ export default function Dashboard() {
 
       <div className="page-header">
         <h1>Dashboard</h1>
+        <div className="status-pill">
+          <span className={`status-dot ${status?.running === false ? "idle" : ""}`} />
+          {status?.running === false ? "Stopped" : "Running"}
+        </div>
       </div>
       <div className="page-body">
         <div className="stats-bar" style={{ marginBottom: 24 }}>
@@ -163,6 +191,7 @@ export default function Dashboard() {
           )}
           {topics.map((topic) => {
             const st = statFor(topic.name);
+            const next = status?.topic_next_fetch?.[topic.name];
             return (
               <div className="topic-card" key={topic.name}>
                 <div className="topic-card-header">
@@ -170,6 +199,7 @@ export default function Dashboard() {
                   <button
                     className="btn btn-sm"
                     onClick={() => handleRefresh(topic.name)}
+                    title="Fetch and generate now"
                   >
                     {"\u{1F504}"} Refresh
                   </button>
@@ -181,7 +211,14 @@ export default function Dashboard() {
                 </div>
                 <div className="topic-card-meta" style={{ borderTop: "1px solid var(--border-color)", paddingTop: 8 }}>
                   <span>{"\u{1F4C4}"} {st?.post_count ?? 0} posts</span>
-                  <span>{"\u{1F551}"} Last: {fmtTime(st?.last_post_at)}</span>
+                  <span title={st?.last_post_at ?? ""}>
+                    {"\u{1F551}"} Last: {fmtLastTime(st?.last_post_at)}
+                  </span>
+                  {next && (
+                    <span className="tag tag-green">
+                      {"\u{23F1}"} Next in {fmtRelative(next)}
+                    </span>
+                  )}
                 </div>
               </div>
             );

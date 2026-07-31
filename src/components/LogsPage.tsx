@@ -11,8 +11,10 @@ interface LogEntry {
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("ALL");
+  const [autoScroll, setAutoScroll] = useState(true);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
 
   const loadLogs = async () => {
     try {
@@ -34,17 +36,35 @@ export default function LogsPage() {
     }
   };
 
+  const handleClear = async () => {
+    try {
+      await invoke("clear_logs");
+      setLogs([]);
+      setExportMsg(null);
+    } catch (e) {
+      console.error("clear_logs failed", e);
+    }
+  };
+
   useEffect(() => {
     loadLogs();
     const interval = setInterval(loadLogs, 5000);
     return () => clearInterval(interval);
   }, []);
 
+  // Auto-scroll to bottom unless user scrolled up
   useEffect(() => {
-    if (containerRef.current) {
+    if (containerRef.current && autoScroll && !userScrolledRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [logs, autoScroll]);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    userScrolledRef.current = !atBottom;
+  };
 
   const filteredLogs =
     filter === "ALL" ? logs : logs.filter((l) => l.level === filter);
@@ -63,8 +83,19 @@ export default function LogsPage() {
       <div className="page-header">
         <h1>Logs</h1>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label className="form-checkbox" style={{ fontSize: 12, marginRight: 4 }}>
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
           <button className="btn btn-sm" onClick={handleExport}>
             Export
+          </button>
+          <button className="btn btn-sm" onClick={handleClear} title="Clear log buffer">
+            Clear
           </button>
           <div style={{ width: 1, height: 20, background: "var(--border-color)" }} />
           {["ALL", "INFO", "WARN", "ERROR"].map((l) => (
@@ -98,7 +129,7 @@ export default function LogsPage() {
             {exportMsg}
           </div>
         )}
-        <div className="log-container" ref={containerRef}>
+        <div className="log-container" ref={containerRef} onScroll={handleScroll}>
           {filteredLogs.length === 0 && (
             <div style={{ color: "var(--text-muted)", textAlign: "center", paddingTop: 40 }}>
               No logs yet. Logs will appear here when the pipeline runs.
