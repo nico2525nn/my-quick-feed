@@ -10,9 +10,25 @@
 
 - **アプリ**: My Quick Feed — RSS/RSSHUB から情報を取得し、OMPエージェントで記事を生成して Discord フォーラムに自動投稿する Windows デスクトップアプリ
 - **技術**: Tauri v2 + Rust + React/TypeScript (Vite)
-- **開発ディレクトリ**: **`D:\quickfeed`**（ASCIIパス必須、D: ドライブで作業可）
-- **ドキュメント置き場**: `D:\学校\app\my-quick-feed`（日本語パス — ビルド不可。spec.md・agents.md の同期先）
-- **git リポジトリ**: `D:\quickfeed` にあり。`D:\学校\app\my-quick-feed` には agents.md / my-quick-feed.yaml を同期する
+
+### ディレクトリ構成（2026-07-31 整理済み）
+
+| 場所 | 役割 | git |
+|---|---|---|
+| **`D:\学校\app\my-quick-feed`** | **本拠地（元の場所）**。ソース編集・git 管理はここ | ✅ master（e7dc770 まで） |
+| **`D:\quickfeed`** | **テスト用**。日本語パスではビルド不可のため、ビルド・実行はここで行う（D:\学校 からソースを同期） | ❌ なし |
+| ~~`C:\quickfeed`~~ | ~~旧開発場所~~ 削除済み（2026-07-31） | ❌ |
+
+**注意**: 日本語パス（D:\学校\app\my-quick-feed）では Rust ビルドが失敗する（MSVC/MinGW リンカが日本語パスを処理できない）。**ビルドは必ず D:\quickfeed で行うこと**。
+
+### 開発フロー（重要）
+
+```
+1. D:\学校\app\my-quick-feed でソース編集 → git commit
+2. D:\quickfeed にソースを同期: robocopy D:\学校\app\my-quick-feed D:\quickfeed /MIR /XD target node_modules dist .git /NFL /NDL /NJH /NJS
+3. D:\quickfeed でビルド・テスト（cwd パラメータで D:\quickfeed を指定）
+4. run.bat は D:\quickfeed のものを実行（D:\学校 の run.bat はラッパー）
+```
 
 ---
 
@@ -24,7 +40,7 @@
 - MSVC リンカ (`link.exe`) が日本語パスを正しく処理できない
 - MinGW の `dlltool.exe` も同様
 
-**対策**: **`D:\quickfeed`**（ASCIIパス）でビルドする。ソース変更は必ず D:\quickfeed で行う。
+**対策**: **`D:\quickfeed`**（ASCIIパス）でビルドする。ソース変更（git管理）は `D:\学校\app\my-quick-feed` で行い、robocopy で D:\quickfeed へ同期してからビルドする。
 
 ### 2.2 ツールチェーン（インストール済み）
 
@@ -299,7 +315,10 @@ topics:
 
 ### 7.5 Git
 
-- `D:\quickfeed` で管理済み。コミット済み: 初期実装、テンプレプロンプト、スレッド方式、ログ修正、モデル設定、RSS修正、OMP修正、複数記事対応、アイコン、spec準拠修正、UX改善、mimo対応
+- **正規リポジトリは `D:\学校\app\my-quick-feed`**（2026-07-31 に D:\quickfeed から移設）。ブランチ `master`。
+- `D:\quickfeed` はテスト用コピーで **.git なし**。`C:\quickfeed` は削除済み。
+- リモート（GitHub 等）は未設定。バックアップが必要なら `git remote add origin <url>` で追加すること。
+- コミット済み: 初期実装、テンプレプロンプト、スレッド方式、ログ修正、モデル設定、RSS修正、OMP修正、複数記事対応、アイコン、spec準拠修正、UX改善、mimo対応、agents.md集約
 
 ---
 
