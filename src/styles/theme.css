@@ -632,5 +632,9 @@ body {
 }
 
 .fade-in {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   animation: fadeIn 0.15s ease-out;
 }
