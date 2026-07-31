@@ -67,7 +67,12 @@ impl Scheduler {
             let next = Local::now() + chrono::Duration::minutes(interval_min as i64);
             next_runs.lock().insert(topic_name.clone(), next);
 
+            // 起動時即実行（1回のみ）
             Self::run_topic_pipeline(&pipeline, &config_manager, &topic_name).await;
+
+            // interval の最初の tick は即発火するため、先に消費して
+            // 次回実行まで interval_min 分待つようにする
+            timer.tick().await;
 
             loop {
                 timer.tick().await;

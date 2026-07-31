@@ -1,11 +1,11 @@
-mod ai;
-mod config;
-mod db;
-mod discord;
-mod errors;
-mod fetcher;
-mod pipeline;
-mod scheduler;
+pub mod ai;
+pub mod config;
+pub mod db;
+pub mod discord;
+pub mod errors;
+pub mod fetcher;
+pub mod pipeline;
+pub mod scheduler;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -253,20 +253,41 @@ async fn export_logs(state: tauri::State<'_, AppState>) -> Result<String, String
 /// ===== App Entry Point =====
 
 pub fn run() {
-    // tracing subscriber: stdout + LogCaptureLayer
+    // tracing subscriber: stdout + ファイル + LogCaptureLayer
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_level(true);
     let capture_layer = LogCaptureLayer;
 
+    // ログをファイルにも常時書き出す（%APPDATA%\com.myquickfeed.app\logs\app.log）
+    // 注意: non_blocking はバッファ満杯でブロックしアプリ全体が止まるため、同期書き込みを使う
+    let log_dir = std::env::var("APPDATA")
+        .map(|a| std::path::PathBuf::from(a).join("com.myquickfeed.app").join("logs"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    std::fs::create_dir_all(&log_dir).ok();
+    let file_layer = {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("app.log"))
+            .expect("Failed to open log file");
+        tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_level(true)
+            .with_writer(file)
+    };
+
     tracing_subscriber::registry()
         .with(stdout_layer)
+        .with(file_layer)
         .with(capture_layer)
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "my_quick_feed=info".into()),
         )
         .init();
+
+    info!("Log file: {}", log_dir.join("app.log").display());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
+use tokio::process::Command;
 use tracing::{info, warn};
 use crate::ai::{ArticleResult, ArticleListResult, resolve_system_prompt};
 use crate::config::TopicConfig;
@@ -41,6 +42,7 @@ pub async fn run_agent(
         recent_titles.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
     };
 
+    // プロンプト本体に記事リストも含める（OMP -p は複数 @file に非対応のため）
     let prompt = format!(
         r#"あなたはニュース記事を生成するアシスタントです。
 
@@ -85,24 +87,44 @@ JSON以外の出力は絶対に含めないでください。
     );
 
     info!(
-        topic = %topic.name, "Running agent [cmd={}, model={}, timeout={}s, prompt={}chars]",
-        command, model, timeout_sec, prompt.len()
+        topic = %topic.name, "Running agent [cmd={}, model={}, timeout={}s, prompt={}chars, articles={}chars]",
+        command, model, timeout_sec, prompt.len(), feed_summary.len()
     );
 
     // OMP 作業ディレクトリを分離（セッション履歴の汚染防止）
     let work_dir = omp_work_dir();
     let _ = std::fs::create_dir_all(&work_dir);
 
-    // プロンプトファイルを作業ディレクトリに書き込み
+    // プロンプトファイル（記事リスト込み）を作業ディレクトリに書き込み
     let prompt_path = work_dir.join("prompt.txt");
     let has_file = std::fs::write(&prompt_path, &prompt).is_ok();
 
     let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
+        let exec_started = std::time::Instant::now();
         let output = if has_file {
-            run_omp_file(&work_dir, &prompt_path)
+            run_omp_file(&work_dir, &prompt_path, model).await
         } else {
-            run_omp_direct(&prompt)
+            run_omp_direct(&prompt, model).await
         };
+        let elapsed = exec_started.elapsed();
+        match &output {
+            Ok(articles) => {
+                info!(
+                    topic = %topic.name,
+                    "OMP実行完了: {} 記事, {:.1}s",
+                    articles.len(),
+                    elapsed.as_secs_f64()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    topic = %topic.name,
+                    "OMP実行失敗: {} ({:.1}s)",
+                    e,
+                    elapsed.as_secs_f64()
+                );
+            }
+        }
         let _ = std::fs::remove_file(&prompt_path);
         output
     })
@@ -120,23 +142,57 @@ JSON以外の出力は絶対に含めないでください。
     }
 }
 
-fn run_omp_file(work_dir: &PathBuf, prompt_path: &PathBuf) -> AppResult<Vec<ArticleResult>> {
+async fn run_omp_file(work_dir: &PathBuf, prompt_path: &PathBuf, model: &str) -> AppResult<Vec<ArticleResult>> {
     let mut cmd = Command::new("omp");
     cmd.args(["-p"]);
+    // モデルを明示指定（プロンプト内の「## 使用モデル」だけでは確実でない）
+    if !model.is_empty() && model != "default" {
+        cmd.args(["--model", model]);
+    }
+    // マルチモーダル/対話型モデル（mimo等）はタスク実行を明示しないと
+    // 「何をしたいですか？」と確認応答をするため、システムプロンプトで強制する
+    if model.contains("mimo") {
+        cmd.args([
+            "--append-system-prompt",
+            "あなたはタスク実行エージェントです。ユーザーが渡したファイルや指示は実行すべきタスクです。指示に従って実行し、要求された出力のみを返してください。ユーザーに確認したり質問したりしないでください。",
+        ]);
+    }
     cmd.arg(format!("@{}", prompt_path.to_string_lossy()));
     cmd.current_dir(work_dir); // セッション紐づけ先を分離
+    cmd.kill_on_drop(true); // timeout 時は子プロセスを kill
     hide_window(&mut cmd);
-    let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).output()
+    let output = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .await
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
     parse_omp_output(output)
 }
 
-fn run_omp_direct(prompt: &str) -> AppResult<Vec<ArticleResult>> {
+async fn run_omp_direct(prompt: &str, model: &str) -> AppResult<Vec<ArticleResult>> {
     let mut cmd = Command::new("omp");
-    cmd.args(["-p", prompt]);
+    cmd.args(["-p"]);
+    if !model.is_empty() && model != "default" {
+        cmd.args(["--model", model]);
+    }
+    if model.contains("mimo") {
+        cmd.args([
+            "--append-system-prompt",
+            "あなたはタスク実行エージェントです。ユーザーが渡したファイルや指示は実行すべきタスクです。指示に従って実行し、要求された出力のみを返してください。ユーザーに確認したり質問したりしないでください。",
+        ]);
+    }
+    cmd.arg(prompt);
     cmd.current_dir(omp_work_dir());
+    cmd.kill_on_drop(true);
     hide_window(&mut cmd);
-    let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).output()
+    let output = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .await
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
     parse_omp_output(output)
 }
@@ -159,7 +215,6 @@ pub fn cleanup_omp_sessions() {
 
 #[cfg(target_os = "windows")]
 fn hide_window(cmd: &mut Command) {
-    use std::os::windows::process::CommandExt;
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 #[cfg(not(target_os = "windows"))]
@@ -168,10 +223,16 @@ fn hide_window(_cmd: &mut Command) {}
 fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult>> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!("omp exit: {:?}\nstderr: {}", output.status.code(), stderr);
+        warn!(
+            "omp exit: {:?}\nstderr: {}\nstdout先頭: {}",
+            output.status.code(),
+            stderr,
+            String::from_utf8_lossy(&output.stdout).chars().take(200).collect::<String>()
+        );
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    info!("omp stdout: {} bytes", stdout.len());
 
     // 1) 直接JSON配列としてパース
     if let Ok(list) = serde_json::from_str::<Vec<ArticleResult>>(&stdout) {
@@ -260,7 +321,7 @@ fn check_command_exists(command: &str) -> Result<(), String> {
     } else {
         ("which", &[command])
     };
-    Command::new(cmd).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status()
+    std::process::Command::new(cmd).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status()
         .map(|s| if s.success() { Ok(()) } else { Err(format!("'{}' not found on PATH", command)) })
         .unwrap_or(Err(format!("Failed to check '{}'", command)))
 }

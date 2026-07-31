@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info, warn};
 use crate::ai::{call_direct_api, run_agent, ArticleResult};
 use crate::config::{ConfigManager, TopicConfig};
@@ -28,27 +29,58 @@ impl Pipeline {
 
     pub async fn run(&self, topic: &TopicConfig) -> AppResult<()> {
         let tn = &topic.name;
-        info!(topic = %tn, "Pipeline started");
+        let started = Instant::now();
+        info!(topic = %tn, "=== Pipeline started ===");
+        info!(topic = %tn, "Sources: {} 個", topic.sources.len());
 
         // Step 1: Fetch（同一実行内の重複はメモリ上 HashSet で管理）
         let mut seen_urls: HashSet<String> = HashSet::new();
         let mut all_items: Vec<FeedItem> = Vec::new();
-        for source in &topic.sources {
+        for (si, source) in topic.sources.iter().enumerate() {
+            // Reddit等のレート制限回避: ソース間に2秒ディレイ
+            if si > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            let fetch_started = Instant::now();
             let items = match source.source_type.as_str() {
                 "rss" => match fetch_feed(&source.url).await {
-                    Ok(feed) => feed.items,
-                    Err(e) => { error!(topic = %tn, "RSS failed: {} — {}", source.url, e); continue; }
+                    Ok(feed) => {
+                        info!(
+                            topic = %tn,
+                            "  [{}] RSS取得OK: {} ({} items, {:.1}s)",
+                            si + 1, source.url, feed.items.len(),
+                            fetch_started.elapsed().as_secs_f64()
+                        );
+                        feed.items
+                    }
+                    Err(e) => {
+                        error!(topic = %tn, "  [{}] RSS取得失敗: {} — {}", si + 1, source.url, e);
+                        continue;
+                    }
                 },
                 "rsshub" => {
-                    // base_url + path 形式（url 優先、無ければ base_url+path）
                     let base = source.base_url.as_deref().unwrap_or(DEFAULT_RSSHUB_URL);
                     let path = source.path.as_deref().unwrap_or(&source.url);
                     match fetch_rsshub(base, path).await {
-                        Ok(feed) => feed.items,
-                        Err(e) => { error!(topic = %tn, "RSSHUB failed: {} — {}", source.url, e); continue; }
+                        Ok(feed) => {
+                            info!(
+                                topic = %tn,
+                                "  [{}] RSSHUB取得OK: {}/{} ({} items, {:.1}s)",
+                                si + 1, base, path, feed.items.len(),
+                                fetch_started.elapsed().as_secs_f64()
+                            );
+                            feed.items
+                        }
+                        Err(e) => {
+                            error!(topic = %tn, "  [{}] RSSHUB取得失敗: {} — {}", si + 1, source.url, e);
+                            continue;
+                        }
                     }
                 }
-                other => { warn!(topic = %tn, "Unknown source type: {}", other); continue; }
+                other => {
+                    warn!(topic = %tn, "  [{}] 不明なソース種別: {}", si + 1, other);
+                    continue;
+                }
             };
             for item in items {
                 if seen_urls.insert(item.link.clone()) {
@@ -56,24 +88,47 @@ impl Pipeline {
                 }
             }
         }
-        if all_items.is_empty() { info!(topic = %tn, "No items"); return Ok(()); }
-        info!(topic = %tn, "Fetched {} items (deduped)", all_items.len());
+
+        if all_items.is_empty() {
+            info!(topic = %tn, "=== 取得アイテムなし: 終了 ({:.1}s) ===", started.elapsed().as_secs_f64());
+            return Ok(());
+        }
+        // OMP のコンテキスト制限対策: 最大40件まで（多すぎると処理が重い/タイムアウトする）
+        if all_items.len() > 40 {
+            info!(topic = %tn, "アイテム数制限: {} → 40件", all_items.len());
+            all_items.truncate(40);
+        }
+        info!(
+            topic = %tn,
+            "取得完了: {} items（同一実行内重複除外後、{:.1}s）",
+            all_items.len(),
+            started.elapsed().as_secs_f64()
+        );
 
         // Step 2: 直近2日分の投稿タイトルを取得（重複防止用）
         let recent_titles = self.db.get_recent_titles(tn, RECENT_TITLE_DAYS).unwrap_or_default();
         if !recent_titles.is_empty() {
-            info!(topic = %tn, "{} recent titles loaded for dedup", recent_titles.len());
+            info!(topic = %tn, "直近{}日分の投稿タイトル: {} 件", RECENT_TITLE_DAYS, recent_titles.len());
+            for (i, t) in recent_titles.iter().take(5).enumerate() {
+                info!(topic = %tn, "  [{}] 既投稿: {}", i + 1, t);
+            }
+            if recent_titles.len() > 5 {
+                info!(topic = %tn, "  ... 他 {} 件", recent_titles.len() - 5);
+            }
+        } else {
+            info!(topic = %tn, "直近{}日分の投稿なし（初回実行）", RECENT_TITLE_DAYS);
         }
 
         // Step 3: AI
         let config = self.config_manager.get();
+        let ai_started = Instant::now();
         let articles: Vec<ArticleResult> = match config.ai.mode.as_str() {
             "direct" => {
                 let api_key = config.ai.api_key.as_deref()
                     .ok_or_else(|| AppError::Config("API key not configured".into()))?;
                 let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
                 let base_url = config.ai.base_url.as_deref().unwrap_or("https://openrouter.ai/api/v1");
-                info!(topic = %tn, "Direct API [model={}]", model);
+                info!(topic = %tn, "Direct API呼び出し [model={}]", model);
                 call_direct_api(api_key, model, base_url, topic, &all_items, &recent_titles)
                     .await.map(|a| vec![a])?
             }
@@ -81,13 +136,29 @@ impl Pipeline {
                 let cmd = config.ai.agent_command.as_deref().unwrap_or("omp");
                 let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
                 let timeout = config.ai.agent_timeout_sec.unwrap_or(180);
-                info!(topic = %tn, "Agent [cmd={}, model={}, timeout={}s]", cmd, model, timeout);
+                info!(topic = %tn, "Agent呼び出し [cmd={}, model={}, timeout={}s]", cmd, model, timeout);
                 run_agent(cmd, model, timeout, topic, &all_items, &recent_titles).await?
             }
         };
+        info!(
+            topic = %tn,
+            "AI生成完了: {} 記事 ({:.1}s)",
+            articles.len(),
+            ai_started.elapsed().as_secs_f64()
+        );
 
-        if articles.is_empty() { info!(topic = %tn, "No articles from agent"); return Ok(()); }
-        info!(topic = %tn, "{} article(s) generated", articles.len());
+        if articles.is_empty() {
+            info!(topic = %tn, "=== 生成記事0件: 終了 ({:.1}s) ===", started.elapsed().as_secs_f64());
+            return Ok(());
+        }
+
+        for (i, a) in articles.iter().enumerate() {
+            info!(
+                topic = %tn,
+                "  記事[{}]: \"{}\" (tags={:?}, sources={})",
+                i + 1, a.title, a.tags, a.sources.len()
+            );
+        }
 
         // Step 4: Post each article（通常メッセージ・Markdown、Embed枠なし）
         if let Some(discord) = &self.discord {
@@ -96,20 +167,24 @@ impl Pipeline {
 
             // スレッドが無ければ作成し、トピック説明文を最初の投稿に
             let thread_id = match thread_id {
-                Some(tid) => tid,
+                Some(tid) => {
+                    info!(topic = %tn, "既存スレッド使用: {}", tid);
+                    tid
+                }
                 None => {
                     let desc = format!(
                         "🖊️ 【{}】{} に関するニュースを自動収集・まとめます",
                         topic.name, topic.name
                     );
-                    info!(topic = %tn, "Creating new forum thread");
+                    info!(topic = %tn, "新規スレッド作成: {}", topic.name);
                     match discord.create_thread(&dc, &topic.name, &desc).await {
                         Ok((_, tid)) => {
                             self.db.set_topic_thread(tn, &tid).ok();
+                            info!(topic = %tn, "スレッド作成OK: {}", tid);
                             tid
                         }
                         Err(e) => {
-                            error!(topic = %tn, "Thread creation failed: {}", e);
+                            error!(topic = %tn, "スレッド作成失敗: {}", e);
                             return Ok(());
                         }
                     }
@@ -123,19 +198,25 @@ impl Pipeline {
                 } else {
                     Some(serde_json::to_string(&article.tags).unwrap_or_default())
                 };
-
+                let post_started = Instant::now();
                 match discord.post_article(&thread_id, &article.title, &article.content, img).await {
                     Ok(msg_id) => {
+                        info!(
+                            topic = %tn,
+                            "投稿OK [{}]: \"{}\" (msg={}, {:.1}s)",
+                            i + 1, article.title, msg_id,
+                            post_started.elapsed().as_secs_f64()
+                        );
                         self.db.insert_post(tn, &article.title, &article.content, img, tags_json.as_deref()).ok();
-                        info!(topic = %tn, "Posted #{}: \"{}\" (msg={})", i + 1, article.title, msg_id);
                     }
                     Err(e) => {
-                        error!(topic = %tn, "Post #{} failed [{}]: {}", i + 1, article.title, e);
+                        error!(topic = %tn, "投稿失敗 [{}]: \"{}\" — {}", i + 1, article.title, e);
                         self.db.insert_post(tn, &article.title, &article.content, img, tags_json.as_deref()).ok();
                     }
                 }
             }
         } else {
+            info!(topic = %tn, "Discord未設定: DBのみに保存");
             for article in &articles {
                 let tags_json = if article.tags.is_empty() {
                     None
@@ -144,10 +225,9 @@ impl Pipeline {
                 };
                 self.db.insert_post(tn, &article.title, &article.content, article.image_url.as_deref(), tags_json.as_deref()).ok();
             }
-            info!(topic = %tn, "Saved {} articles to DB", articles.len());
         }
 
-        info!(topic = %tn, "Pipeline done");
+        info!(topic = %tn, "=== Pipeline 完了 ({:.1}s) ===", started.elapsed().as_secs_f64());
         Ok(())
     }
 }

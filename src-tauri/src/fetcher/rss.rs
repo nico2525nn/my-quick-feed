@@ -21,14 +21,65 @@ pub struct Feed {
 }
 
 pub async fn fetch_feed(url: &str) -> AppResult<Feed> {
+    // Reddit は http だと 429 になるため https に置換
+    let url = if url.starts_with("http://www.reddit.com/") || url.starts_with("http://reddit.com/") {
+        let replaced = url.replacen("http://", "https://", 1);
+        info!("Reddit URL: http→https に置換: {}", replaced);
+        replaced
+    } else {
+        url.to_string()
+    };
     info!("Fetching RSS feed: {}", url);
     let client = reqwest::Client::builder()
-        .user_agent("MyQuickFeed/0.1")
+        .user_agent("MyQuickFeed/0.1 (RSS aggregator)")
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let response = client.get(url).send().await?;
-    let body = response.text().await?;
-    parse_feed(&body)
+
+    // 429（レート制限）対策: 最大5回リトライ（Retry-After 尊重、無ければ 5s/10s/15s/20s/25s バックオフ）
+    let mut last_err: Option<AppError> = None;
+    for attempt in 0..5 {
+        let response = client.get(url.as_str()).send().await?;
+        let status = response.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // Retry-After ヘッダーを尊重
+            let wait = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(5 * (attempt as u64 + 1));
+            warn!(
+                "Rate limited (429) for {}, retry in {}s (attempt {}/5)",
+                url, wait, attempt + 1
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            last_err = Some(AppError::RssParse(format!(
+                "HTTP 429 Too Many Requests for {}",
+                url
+            )));
+            continue;
+        }
+
+        if !status.is_success() {
+            return Err(AppError::RssParse(format!(
+                "HTTP {} for {}",
+                status, url
+            )));
+        }
+        let body = response.text().await?;
+        info!(
+            "Fetched {} ({} bytes, status {})",
+            url,
+            body.len(),
+            status
+        );
+        return parse_feed(&body);
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        AppError::RssParse(format!("Failed to fetch after retries: {}", url))
+    }))
 }
 
 pub fn parse_feed(xml: &str) -> AppResult<Feed> {
