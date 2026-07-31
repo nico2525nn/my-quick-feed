@@ -9,8 +9,8 @@
 
 - **アプリ**: My Quick Feed — RSS/RSSHUB から情報を取得し、OMPエージェントで記事を生成して Discord フォーラムに自動投稿する Windows デスクトップアプリ
 - **技術**: Tauri v2 + Rust + React/TypeScript (Vite)
-- **開発ディレクトリ**: `C:\quickfeed`（**ASCIIパス必須**、後述）
-- **元のユーザーディレクトリ**: `D:\学校\app\my-quick-feed`（日本語パス — ビルド不可のため C: にコピーして開発）
+- **開発ディレクトリ**: **`D:\quickfeed`**（ASCIIパス必須、ユーザー指定で D: ドライブに変更済み）
+- **元のユーザーディレクトリ**: `D:\学校\app\my-quick-feed`（日本語パス — ビルド不可のため使わない。ドキュメント・spec の置き場としてのみ使用）
 
 ---
 
@@ -22,7 +22,9 @@
 - MSVC リンカ (`link.exe`) が日本語パスを正しく処理できない
 - MinGW の `dlltool.exe` も同様
 
-**対策**: `C:\quickfeed` にコピーしてビルドする。ソースは両方に存在するが、**変更は必ず C:\quickfeed で行い、D: に同期する**。
+**対策**: **`D:\quickfeed`**（ASCIIパス）でビルドする。ソース変更は必ず D:\quickfeed で行う。`D:\学校\app\my-quick-feed` には spec.md・agents.md を同期する。
+
+※ かつて `C:\quickfeed` にコピーして開発していたが、2026-07-31 に `D:\quickfeed` へ移行（ユーザー指示: D: ドライブを優先）。git リポジトリは D:\quickfeed に移動済み。
 
 ### 2.2 ツールチェーン（インストール済み）
 
