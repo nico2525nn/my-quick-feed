@@ -4,6 +4,7 @@ use crate::config::DiscordConfig;
 use crate::errors::{AppError, AppResult};
 
 /// Discord REST API を使用したフォーラム投稿クライアント
+/// v1: REST API のみ（Gateway 不使用）
 pub struct DiscordClient {
     token: String,
     http_client: reqwest::Client,
@@ -42,23 +43,23 @@ impl DiscordClient {
         }
     }
 
-    /// フォーラムに新規スレッドを作成し、最初の記事を投稿する
+    /// フォーラムに新規スレッドを作成し、最初の投稿としてトピック説明文を投稿する
     /// 戻り値: (message_id, thread_id)
-    pub async fn post_to_forum(
+    pub async fn create_thread(
         &self,
         config: &DiscordConfig,
-        title: &str,
-        content: &str,
-        image_url: Option<&str>,
+        thread_name: &str,
+        description: &str,
     ) -> AppResult<(String, String)> {
         let base = "https://discord.com/api/v10";
         let thread_url = format!("{}/channels/{}/threads", base, config.forum_channel_id);
 
+        // Embed枠なし・通常メッセージで説明文を投稿
         let body = serde_json::json!({
-            "name": title,
+            "name": thread_name,
             "message": {
-                "content": "",
-                "embeds": [make_embed(title, content, image_url)]
+                "content": description,
+                "embeds": []
             }
         });
 
@@ -92,12 +93,12 @@ impl DiscordClient {
             .ok_or_else(|| AppError::Discord("No message id in response".into()))?
             .to_string();
 
-        info!("Created thread {} with message {}", thread_id, message_id);
+        info!("Created thread {} with description", thread_id);
         Ok((message_id, thread_id))
     }
 
-    /// 既存のフォーラムスレッドにメッセージとして追記する
-    pub async fn post_to_thread(
+    /// 既存のフォーラムスレッドに記事を通常メッセージ（Markdown、Embed枠なし）として投稿する
+    pub async fn post_article(
         &self,
         thread_id: &str,
         title: &str,
@@ -107,8 +108,14 @@ impl DiscordClient {
         let base = "https://discord.com/api/v10";
         let msg_url = format!("{}/channels/{}/messages", base, thread_id);
 
+        let mut md = format!("**{}**\n\n{}", title, content.trim());
+        if let Some(url) = image_url.filter(|u| !u.is_empty()) {
+            md.push_str(&format!("\n\n![image]({})", url));
+        }
+
         let body = serde_json::json!({
-            "embeds": [make_embed(title, content, image_url)]
+            "content": md,
+            "embeds": []
         });
 
         let resp = self
@@ -140,16 +147,4 @@ impl DiscordClient {
         info!("Posted to thread {}: message_id={}", thread_id, message_id);
         Ok(message_id)
     }
-}
-
-/// Embed 構造体を生成（共通）
-fn make_embed(title: &str, content: &str, image_url: Option<&str>) -> serde_json::Value {
-    serde_json::json!({
-        "title": title,
-        "description": content,
-        "color": 0x58a6ff,
-        "image": image_url
-            .filter(|u| !u.is_empty())
-            .map(|u| serde_json::json!({"url": u})),
-    })
 }

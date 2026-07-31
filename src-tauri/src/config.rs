@@ -27,6 +27,12 @@ pub struct SourceConfig {
     #[serde(rename = "type")]
     pub source_type: String,
     pub url: String,
+    /// RSSHUB用: ベースURL（省略時は rsshub.app）
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// RSSHUB用: パス（例: /twitter/user/PlayApex）
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

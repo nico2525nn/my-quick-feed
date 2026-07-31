@@ -5,15 +5,6 @@ use tracing::info;
 
 use crate::errors::AppResult;
 
-#[derive(Debug, Clone)]
-pub struct SeenItem {
-    pub id: i64,
-    pub topic_id: String,
-    pub source_url: String,
-    pub title: Option<String>,
-    pub fetched_at: String,
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Post {
     pub id: i64,
@@ -21,6 +12,7 @@ pub struct Post {
     pub title: String,
     pub content: String,
     pub image_url: Option<String>,
+    pub tags: Option<String>,
     pub discord_message_id: Option<String>,
     pub discord_thread_id: Option<String>,
     pub created_at: String,
@@ -69,24 +61,22 @@ impl Database {
         let conn = self.conn.lock();
         conn.execute_batch(
             "
-            CREATE TABLE IF NOT EXISTS seen_items (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                topic_id    TEXT NOT NULL,
-                source_url  TEXT NOT NULL,
-                title       TEXT,
-                fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                UNIQUE(topic_id, source_url)
-            );
-
             CREATE TABLE IF NOT EXISTS posts (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,
                 topic_id           TEXT NOT NULL,
                 title              TEXT NOT NULL,
                 content            TEXT NOT NULL,
                 image_url          TEXT,
+                tags               TEXT,
                 discord_message_id TEXT,
                 discord_thread_id  TEXT,
                 created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_threads (
+                topic_id    TEXT PRIMARY KEY,
+                thread_id   TEXT NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS reactions (
@@ -96,28 +86,23 @@ impl Database {
                 user_id     TEXT NOT NULL,
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            CREATE TABLE IF NOT EXISTS topic_threads (
-                topic_id    TEXT PRIMARY KEY,
-                thread_id   TEXT NOT NULL,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-            );
 
-            CREATE INDEX IF NOT EXISTS idx_seen_items_topic ON seen_items(topic_id, source_url);
             CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id);
             ",
         )?;
+        // 既存DB（tags列なし）へのマイグレーション
+        let has_tags: bool = conn
+            .prepare("PRAGMA table_info(posts)")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(1))
+                    .map(|rows| rows.filter_map(|r| r.ok()).any(|c| c == "tags"))
+            })?;
+        if !has_tags {
+            conn.execute_batch("ALTER TABLE posts ADD COLUMN tags TEXT;")?;
+            info!("Migrated: added posts.tags column");
+        }
         info!("Database migration completed");
         Ok(())
-    }
-
-    pub fn is_seen(&self, topic_id: &str, source_url: &str) -> AppResult<bool> {
-        let conn = self.conn.lock();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM seen_items WHERE topic_id = ?1 AND source_url = ?2",
-            params![topic_id, source_url],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
     }
 
     pub fn get_topic_thread(&self, topic_id: &str) -> AppResult<Option<String>> {
@@ -143,18 +128,22 @@ impl Database {
         Ok(())
     }
 
-    pub fn mark_seen(
-        &self,
-        topic_id: &str,
-        source_url: &str,
-        title: Option<&str>,
-    ) -> AppResult<()> {
+    /// 直近N日分の投稿タイトルを取得（重複防止用にプロンプトへ埋め込む）
+    pub fn get_recent_titles(&self, topic_id: &str, days: i64) -> AppResult<Vec<String>> {
         let conn = self.conn.lock();
-        conn.execute(
-            "INSERT OR IGNORE INTO seen_items (topic_id, source_url, title) VALUES (?1, ?2, ?3)",
-            params![topic_id, source_url, title],
+        let mut stmt = conn.prepare(
+            "SELECT title FROM posts
+             WHERE topic_id = ?1 AND created_at >= datetime('now', ?2)
+             ORDER BY created_at DESC",
         )?;
-        Ok(())
+        let rows = stmt.query_map(params![topic_id, format!("-{} days", days)], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut titles = Vec::new();
+        for row in rows {
+            titles.push(row?);
+        }
+        Ok(titles)
     }
 
     pub fn insert_post(
@@ -163,11 +152,12 @@ impl Database {
         title: &str,
         content: &str,
         image_url: Option<&str>,
+        tags: Option<&str>,
     ) -> AppResult<i64> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO posts (topic_id, title, content, image_url) VALUES (?1, ?2, ?3, ?4)",
-            params![topic_id, title, content, image_url],
+            "INSERT INTO posts (topic_id, title, content, image_url, tags) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![topic_id, title, content, image_url, tags],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -228,24 +218,40 @@ impl Database {
 
     pub fn get_stats(&self) -> AppResult<DashboardStats> {
         let conn = self.conn.lock();
-        let total_articles: i64 =
-            conn.query_row("SELECT COUNT(*) FROM seen_items", [], |row| row.get(0))?;
         let total_posts: i64 =
             conn.query_row("SELECT COUNT(*) FROM posts", [], |row| row.get(0))?;
         Ok(DashboardStats {
             total_topics: 0, // calculated by caller
-            total_articles,
+            total_articles: total_posts,
             total_posts,
         })
     }
 
-    pub fn get_recent_seen_count(&self, topic_id: &str, since_minutes: i64) -> AppResult<i64> {
+    /// トピックごとの記事数と最終投稿時刻（Dashboard タイル用）
+    pub fn get_topic_stats(&self) -> AppResult<Vec<TopicStat>> {
         let conn = self.conn.lock();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM seen_items WHERE topic_id = ?1 AND fetched_at > datetime('now', ?2)",
-            params![topic_id, format!("-{} minutes", since_minutes)],
-            |row| row.get(0),
+        let mut stmt = conn.prepare(
+            "SELECT topic_id, COUNT(*) as cnt, MAX(created_at) as last
+             FROM posts GROUP BY topic_id",
         )?;
-        Ok(count)
+        let rows = stmt.query_map([], |row| {
+            Ok(TopicStat {
+                topic_id: row.get(0)?,
+                post_count: row.get(1)?,
+                last_post_at: row.get(2)?,
+            })
+        })?;
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(row?);
+        }
+        Ok(stats)
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TopicStat {
+    pub topic_id: String,
+    pub post_count: i64,
+    pub last_post_at: Option<String>,
 }

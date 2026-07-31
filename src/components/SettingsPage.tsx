@@ -21,10 +21,12 @@ interface AppConfig {
 export default function SettingsPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
   const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
 
   useEffect(() => {
     loadConfig();
+    loadAutostart();
   }, []);
 
   const loadConfig = async () => {
@@ -33,6 +35,30 @@ export default function SettingsPage() {
       setConfig(c);
     } catch (e) {
       console.error("Failed to load config", e);
+    }
+  };
+
+  const loadAutostart = async () => {
+    try {
+      const v = await invoke<boolean>("get_autostart");
+      setAutostart(v);
+    } catch (e) {
+      console.error("get_autostart failed", e);
+    }
+  };
+
+  const toggleAutostart = async () => {
+    if (autostart === null) return;
+    const next = !autostart;
+    try {
+      await invoke("set_autostart", { enabled: next });
+      setAutostart(next);
+      setMessage({
+        type: "success",
+        text: next ? "スタートアップ登録しました" : "スタートアップ登録を解除しました",
+      });
+    } catch (e) {
+      setMessage({ type: "error", text: `スタートアップ設定失敗: ${e}` });
     }
   };
 
@@ -163,14 +189,14 @@ export default function SettingsPage() {
                 <label>Provider</label>
                 <input
                   className="form-input"
-                  value={config.ai.base_url ?? ""}
+                  value={config.ai.provider ?? ""}
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      ai: { ...config.ai, base_url: e.target.value || null },
+                      ai: { ...config.ai, provider: e.target.value || null },
                     })
                   }
-                  placeholder="https://openrouter.ai/api/v1"
+                  placeholder="opencode-go"
                 />
               </div>
               <div className="form-group">
@@ -185,10 +211,27 @@ export default function SettingsPage() {
                       ai: { ...config.ai, api_key: e.target.value || null },
                     })
                   }
-                  placeholder="sk-or-xxxxx"
+                  placeholder="sk-xxxxx"
                 />
               </div>
             </div>
+
+            {config.ai.mode === "direct" && (
+              <div className="form-group">
+                <label>Base URL (Directモード用)</label>
+                <input
+                  className="form-input"
+                  value={config.ai.base_url ?? ""}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      ai: { ...config.ai, base_url: e.target.value || null },
+                    })
+                  }
+                  placeholder="https://openrouter.ai/api/v1"
+                />
+              </div>
+            )}
 
             {config.ai.mode === "agent" && (
               <>
@@ -227,7 +270,21 @@ export default function SettingsPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
 
+        {/* Startup Settings */}
+        <div className="settings-section">
+          <h2>Startup</h2>
+          <div className="settings-card">
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={autostart === true}
+                onChange={toggleAutostart}
+              />
+              Windows起動時に自動起動する
+            </label>
           </div>
         </div>
       </div>

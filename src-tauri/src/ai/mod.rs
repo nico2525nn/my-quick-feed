@@ -12,6 +12,8 @@ pub struct ArticleResult {
     pub title: String,
     pub content: String,
     pub image_url: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub sources: Vec<String>,
 }
 

@@ -7,6 +7,7 @@ use tracing::{error, info, warn};
 use crate::config::{ConfigManager, TopicConfig};
 use crate::errors::AppResult;
 use crate::pipeline::Pipeline;
+use crate::ai::agent::cleanup_omp_sessions;
 
 pub struct Scheduler {
     handles: AsyncMutex<HashMap<String, tokio::task::JoinHandle<()>>>,
@@ -26,6 +27,8 @@ impl Scheduler {
     pub async fn start_all(&self) {
         let config = self.config_manager.get();
         let topics = config.topics.clone();
+        // 起動時に OMP セッションをクリーンアップ（履歴汚染防止）
+        cleanup_omp_sessions();
         for topic in &topics {
             self.start_topic(topic).await;
         }
@@ -68,6 +71,8 @@ impl Scheduler {
         let config = config_manager.get();
         if let Some(topic) = config.topics.iter().find(|t| t.name == topic_name) {
             info!(topic = %topic_name, "Pipeline triggered");
+            // パイプライン実行前にもセッションクリーンアップ
+            cleanup_omp_sessions();
             if let Err(e) = pipeline.run(topic).await {
                 error!(topic = %topic_name, "Pipeline failed: {}", e);
             }

@@ -143,6 +143,11 @@ async fn get_topics(state: tauri::State<'_, AppState>) -> Result<Vec<TopicConfig
 }
 
 #[tauri::command]
+async fn get_topic_stats(state: tauri::State<'_, AppState>) -> Result<Vec<db::TopicStat>, String> {
+    state.db.get_topic_stats().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn get_posts(
     state: tauri::State<'_, AppState>,
     topic_id: String,
@@ -177,6 +182,24 @@ async fn refresh_topic(
 #[tauri::command]
 async fn get_logs() -> Result<Vec<LogEntry>, String> {
     Ok(read_logs())
+}
+
+#[tauri::command]
+async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = app.autolaunch();
+    if enabled {
+        autostart.enable().map_err(|e| e.to_string())?;
+    } else {
+        autostart.disable().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 
@@ -223,6 +246,18 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // 多重起動防止: 2つ目のインスタンスは即終了し、既存ウィンドウを表示
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                window.show().ok();
+                window.set_focus().ok();
+            }
+        }))
+        // Windowsスタートアップ登録
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             info!("Starting My Quick Feed...");
 
@@ -314,10 +349,13 @@ pub fn run() {
             update_config,
             get_stats,
             get_topics,
+            get_topic_stats,
             get_posts,
             refresh_topic,
             get_logs,
             export_logs,
+            set_autostart,
+            get_autostart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

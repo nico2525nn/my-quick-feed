@@ -11,19 +11,20 @@ pub async fn call_direct_api(
     base_url: &str,
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
+    recent_titles: &[String],
 ) -> AppResult<ArticleResult> {
     let language = topic.language.as_deref().unwrap_or("ja");
     let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
 
+    let recent_block = if recent_titles.is_empty() {
+        "（なし）".to_string()
+    } else {
+        recent_titles.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
+    };
+
     let feed_text: String = feed_items
         .iter()
-        .map(|item| {
-            format!(
-                "- {}\n  Link: {}",
-                item.title,
-                item.link,
-            )
-        })
+        .map(|item| format!("- {}\n  Link: {}", item.title, item.link))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -34,7 +35,10 @@ pub async fn call_direct_api(
         "messages": [
             {
                 "role": "system",
-                "content": format!("{}\n\n出力は必ずJSON形式で、以下のフィールドを含めてください: title (文字列), content (文字列, 300字程度), image_url (文字列またはnull), sources (文字列の配列)", system_prompt)
+                "content": format!(
+                    "{}\n\n既に投稿済みのトピック:\n{}\n\n出力は必ずJSON形式で、以下のフィールドを含めてください: title (文字列), content (文字列, 300字程度), image_url (文字列またはnull), tags (文字列の配列), sources (文字列の配列)",
+                    system_prompt, recent_block
+                )
             },
             {
                 "role": "user",
@@ -83,12 +87,10 @@ pub async fn call_direct_api(
 fn parse_direct_response(content: &str) -> AppResult<ArticleResult> {
     let content = content.trim();
 
-    // Try direct JSON parse
     if let Ok(article) = serde_json::from_str::<ArticleResult>(content) {
         return Ok(article);
     }
 
-    // Try to find JSON block
     let json_start = content.find('{');
     let json_end = content.rfind('}');
 
@@ -101,16 +103,15 @@ fn parse_direct_response(content: &str) -> AppResult<ArticleResult> {
         }
     }
 
-    // Fallback: treat whole response as article content
     warn!("Could not parse structured JSON from API response, using raw text");
     Ok(ArticleResult {
         title: "Generated Article".to_string(),
         content: content.to_string(),
         image_url: None,
+        tags: vec![],
         sources: vec![],
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -118,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_parse_direct_valid_json() {
-        let content = r#"{"title":"Test","content":"Body","image_url":null,"sources":["A"]}"#;
+        let content = r#"{"title":"Test","content":"Body","image_url":null,"tags":[],"sources":["A"]}"#;
         let result = parse_direct_response(content).unwrap();
         assert_eq!(result.title, "Test");
     }

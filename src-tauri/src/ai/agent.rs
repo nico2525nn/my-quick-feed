@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -8,6 +9,11 @@ use crate::errors::{AppError, AppResult};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+/// OMP 作業ディレクトリ（セッション分離用）
+fn omp_work_dir() -> PathBuf {
+    std::env::temp_dir().join("my-quick-feed").join("omp")
+}
+
 /// OMP CLI を呼び出し、記事リストを取得する
 pub async fn run_agent(
     command: &str,
@@ -15,6 +21,7 @@ pub async fn run_agent(
     timeout_sec: u64,
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
+    recent_titles: &[String],
 ) -> AppResult<Vec<ArticleResult>> {
     check_command_exists(command).map_err(|e| {
         AppError::Agent(format!(
@@ -26,6 +33,13 @@ pub async fn run_agent(
     let feed_summary = format_feed_summary(feed_items);
     let language = topic.language.as_deref().unwrap_or("ja");
     let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
+
+    // 直近投稿タイトル一覧（重複防止）
+    let recent_block = if recent_titles.is_empty() {
+        "（なし）".to_string()
+    } else {
+        recent_titles.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
+    };
 
     let prompt = format!(
         r#"あなたはニュース記事を生成するアシスタントです。
@@ -39,6 +53,9 @@ pub async fn run_agent(
 ## 使用モデル
 {model}
 
+## 既に投稿済みのトピック（重複防止用）
+{recent_block}
+
 ## システム指示
 {system_prompt}
 
@@ -47,12 +64,14 @@ pub async fn run_agent(
 
 ## 出力形式
 注目すべきニュースそれぞれに対して記事を生成し、JSON配列で出力してください。
+既に投稿済みのトピックと内容が完全に重複する場合はスキップしてください。
 JSON以外の出力は絶対に含めないでください。
 [
   {{
     "title": "記事タイトル",
     "content": "記事本文（300字程度）",
     "image_url": "関連画像URL（あれば）",
+    "tags": ["タグ1", "タグ2"],
     "sources": ["出典1", "出典2"]
   }}
 ]
@@ -60,6 +79,7 @@ JSON以外の出力は絶対に含めないでください。
         topic_name = topic.name,
         language = language,
         model = model,
+        recent_block = recent_block,
         system_prompt = system_prompt,
         feed_summary = feed_summary,
     );
@@ -69,19 +89,21 @@ JSON以外の出力は絶対に含めないでください。
         command, model, timeout_sec, prompt.len()
     );
 
-    let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!("mqf_prompt_{}.txt", std::process::id()));
-    let has_file = std::fs::write(&tmp_path, &prompt).is_ok();
+    // OMP 作業ディレクトリを分離（セッション履歴の汚染防止）
+    let work_dir = omp_work_dir();
+    let _ = std::fs::create_dir_all(&work_dir);
+
+    // プロンプトファイルを作業ディレクトリに書き込み
+    let prompt_path = work_dir.join("prompt.txt");
+    let has_file = std::fs::write(&prompt_path, &prompt).is_ok();
 
     let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
         let output = if has_file {
-            run_omp_file(&tmp_path)
+            run_omp_file(&work_dir, &prompt_path)
         } else {
             run_omp_direct(&prompt)
         };
-        if has_file {
-            std::fs::remove_file(&tmp_path).ok();
-        }
+        let _ = std::fs::remove_file(&prompt_path);
         output
     })
     .await;
@@ -98,10 +120,11 @@ JSON以外の出力は絶対に含めないでください。
     }
 }
 
-fn run_omp_file(tmp_path: &std::path::Path) -> AppResult<Vec<ArticleResult>> {
+fn run_omp_file(work_dir: &PathBuf, prompt_path: &PathBuf) -> AppResult<Vec<ArticleResult>> {
     let mut cmd = Command::new("omp");
     cmd.args(["-p"]);
-    cmd.arg(format!("@{}", tmp_path.to_string_lossy()));
+    cmd.arg(format!("@{}", prompt_path.to_string_lossy()));
+    cmd.current_dir(work_dir); // セッション紐づけ先を分離
     hide_window(&mut cmd);
     let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).output()
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
@@ -111,10 +134,27 @@ fn run_omp_file(tmp_path: &std::path::Path) -> AppResult<Vec<ArticleResult>> {
 fn run_omp_direct(prompt: &str) -> AppResult<Vec<ArticleResult>> {
     let mut cmd = Command::new("omp");
     cmd.args(["-p", prompt]);
+    cmd.current_dir(omp_work_dir());
     hide_window(&mut cmd);
     let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null()).output()
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
     parse_omp_output(output)
+}
+
+/// セッションディレクトリをクリーンアップ（アプリ起動時・パイプライン実行前に呼ぶ）
+pub fn cleanup_omp_sessions() {
+    let sessions = omp_work_dir().join(".omp").join("agent").join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&sessions) {
+        let mut removed = 0usize;
+        for entry in entries.flatten() {
+            if std::fs::remove_dir_all(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        if removed > 0 {
+            info!("Cleaned {} OMP session(s) in {:?}", removed, sessions);
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -197,7 +237,6 @@ fn extract_from_omp_session(output: &str) -> Option<Vec<ArticleResult>> {
     }
     if last_text.is_empty() { return None; }
 
-    // 配列
     if let (Some(s), Some(e)) = (last_text.find('['), last_text.rfind(']')) {
         if s < e {
             if let Ok(list) = serde_json::from_str::<Vec<ArticleResult>>(&last_text[s..=e]) {
@@ -205,7 +244,6 @@ fn extract_from_omp_session(output: &str) -> Option<Vec<ArticleResult>> {
             }
         }
     }
-    // 単一
     if let (Some(s), Some(e)) = (last_text.find('{'), last_text.rfind('}')) {
         if s < e {
             if let Ok(article) = serde_json::from_str::<ArticleResult>(&last_text[s..=e]) {

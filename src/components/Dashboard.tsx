@@ -14,6 +14,12 @@ interface TopicInfo {
   sources: { type: string; url: string }[];
 }
 
+interface TopicStat {
+  topic_id: string;
+  post_count: number;
+  last_post_at: string | null;
+}
+
 interface PostSummary {
   id: number;
   topic_id: string;
@@ -24,6 +30,7 @@ interface PostSummary {
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [topics, setTopics] = useState<TopicInfo[]>([]);
+  const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
   const [recentPosts, setRecentPosts] = useState<PostSummary[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -49,6 +56,13 @@ export default function Dashboard() {
     }
 
     try {
+      const ts = await invoke<TopicStat[]>("get_topic_stats");
+      setTopicStats(ts);
+    } catch (e) {
+      console.error("get_topic_stats failed", e);
+    }
+
+    try {
       const p = await invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 });
       setRecentPosts(p);
     } catch (e) {
@@ -70,6 +84,18 @@ export default function Dashboard() {
     } catch (e) {
       showToast("Refresh failed: " + e, false);
     }
+  };
+
+  const statFor = (name: string) => topicStats.find((s) => s.topic_id === name);
+
+  const fmtTime = (iso: string | null | undefined) => {
+    if (!iso) return "never";
+    return new Date(iso + "Z").toLocaleString("ja-JP", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   return (
@@ -112,7 +138,7 @@ export default function Dashboard() {
           <div className="stat-card">
             <span className="stat-icon">{"\u{1F4C4}"}</span>
             <div className="stat-info">
-              <div className="stat-label">Articles Fetched</div>
+              <div className="stat-label">Articles</div>
               <div className="stat-value">{stats?.total_articles ?? "-"}</div>
             </div>
           </div>
@@ -135,24 +161,31 @@ export default function Dashboard() {
               <p>No topics configured. Add topics in the Topics page.</p>
             </div>
           )}
-          {topics.map((topic) => (
-            <div className="topic-card" key={topic.name}>
-              <div className="topic-card-header">
-                <span className="topic-card-title">{topic.name}</span>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => handleRefresh(topic.name)}
-                >
-                  {"\u{1F504}"} Refresh
-                </button>
+          {topics.map((topic) => {
+            const st = statFor(topic.name);
+            return (
+              <div className="topic-card" key={topic.name}>
+                <div className="topic-card-header">
+                  <span className="topic-card-title">{topic.name}</span>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => handleRefresh(topic.name)}
+                  >
+                    {"\u{1F504}"} Refresh
+                  </button>
+                </div>
+                <div className="topic-card-meta">
+                  <span>{"\u{1F4E1}"} {topic.sources.length} sources</span>
+                  <span>{"\u23F1"} Every {topic.interval_min} min</span>
+                  {topic.language && <span className="tag tag-blue">{topic.language}</span>}
+                </div>
+                <div className="topic-card-meta" style={{ borderTop: "1px solid var(--border-color)", paddingTop: 8 }}>
+                  <span>{"\u{1F4C4}"} {st?.post_count ?? 0} posts</span>
+                  <span>{"\u{1F551}"} Last: {fmtTime(st?.last_post_at)}</span>
+                </div>
               </div>
-              <div className="topic-card-meta">
-                <span>{"\u{1F4E1}"} {topic.sources.length} sources</span>
-                <span>{"\u23F1"} Every {topic.interval_min} min</span>
-                {topic.language && <span className="tag tag-blue">{topic.language}</span>}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {recentPosts.length > 0 && (
@@ -169,7 +202,7 @@ export default function Dashboard() {
                       {post.title}
                     </div>
                     <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                      {new Date(post.created_at).toLocaleString()}
+                      {new Date(post.created_at + "Z").toLocaleString()}
                     </span>
                   </div>
                 </div>

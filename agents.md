@@ -264,14 +264,21 @@ topics:
 
 ## 8. 次に実装すべきこと（SPEC 準拠で不足している部分）
 
-1. **`seen_items` 廃止** → 直近2日分の投稿タイトルをプロンプトに埋め込む方式に移行
-2. **Embed 廃止** → 通常 Markdown メッセージで投稿するように変更（spec 準拠）
-3. **OMP 作業ディレクトリ分離** → `%TEMP%\my-quick-feed\omp\` + セッションクリーンアップ
-4. **マルチモーダル画像対応** → 記事の画像URL を OMP に評価させる
-5. **RSSHUB `base_url` + `path` 形式対応** → rsshub.rs の修正
-6. **`provider` 設定** → YAML の `provider` フィールドを OMP の `--model` 解決に使う
-7. **Settings のスクロール確認** → 既に CSS 修正済みだが再確認
-8. **Dashboard のトピック表示** → `get_posts` の失敗でトピックが隠れないように（修正済みだが再確認）
+**2026-07-31 更新: 以下はすべて実装済み（要修正リストを消化）**
+
+1. ✅ `seen_items` 廃止 → 直近2日分の投稿タイトルをプロンプトに埋め込む方式（`get_recent_titles`）
+2. ✅ Embed 廃止 → 通常 Markdown メッセージで投稿（タイトルは `**太字**`、画像は `![image](url)`）
+3. ✅ OMP 作業ディレクトリ分離 → `%TEMP%\my-quick-feed\omp\` + `current_dir` + セッションクリーンアップ
+4. ✅ posts に `tags` 列追加（ArticleResult に tags: Vec<String>、serde default）
+5. ✅ RSSHUB `base_url` + `path` 形式対応（SourceConfig に base_url/path フィールド）
+6. ✅ `provider` 設定 → Settings 画面で入力可能（YAML `ai.provider`）
+7. ✅ Sidebar: Settings を下部の独立ボタンに変更（ナビは Dashboard/Topics/Logs の3つ）
+8. ✅ Dashboard: トピックカードに記事数・最終投稿時刻を表示（`get_topic_stats` IPC）
+9. ✅ スレッド作成時にトピック説明文を投稿（`create_thread` の description）
+10. ✅ スタートアップ登録（tauri-plugin-autostart + Settings トグル）
+11. ✅ 多重起動防止（tauri-plugin-single-instance）
+
+**未着手（v2 / 将来）**: マルチモーダル画像認識、リアクション分析（preferences）、TinyFish返信回答、自前RSSHUB Docker対応
 
 ---
 
