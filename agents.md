@@ -317,7 +317,8 @@ topics:
 
 - **正規リポジトリは `D:\学校\app\my-quick-feed`**（2026-07-31 に D:\quickfeed から移設）。ブランチ `master`。
 - `D:\quickfeed` はテスト用コピーで **.git なし**。`C:\quickfeed` は削除済み。
-- リモート（GitHub 等）は未設定。バックアップが必要なら `git remote add origin <url>` で追加すること。
+- リモート: `origin` = `https://github.com/nico2525nn/my-quick-feed.git`（2026-07-31 に設定・Push 済み）。
+- **コミットまでは勝手に行ってよいが、Push はユーザーの指示があるまで実行しない**（ユーザー指定 2026-07-31）。
 - コミット済み: 初期実装、テンプレプロンプト、スレッド方式、ログ修正、モデル設定、RSS修正、OMP修正、複数記事対応、アイコン、spec準拠修正、UX改善、mimo対応、agents.md集約
 
 ---
