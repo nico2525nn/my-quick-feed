@@ -123,7 +123,9 @@ omp -p --model mimo-v2.5 --append-system-prompt "あなたはタスク実行エ�
 3. **stdin 経由ではプロンプトを渡せない**。`omp -p` は引数 or `@file` でのみ受け取る。
 4. **ウインドウが出る** → `CREATE_NO_WINDOW` (0x08000000) フラグが必要（`tokio::process::Command` の `creation_flags`）。tokio の Command は `creation_flags` を inherent メソッドとして持つ。
 5. **セッション汚染** → 作業ディレクトリを `%TEMP%\my-quick-feed\omp\` に分離すること（`current_dir()` 指定）。OMP のセッションは `{cwd}/.omp/agent/sessions/` に作られる。
-   - **重要（2026-08-03 実測）**: セッションは **`%USERPROFILE%\.omp\agent\sessions\`（グローバル）にも作られ、実行のたびに溜まり続ける**。ディレクトリ名は cwd パス由来（例: `-AppData-Local-Temp-my-quick-feed-omp`）。`cleanup_omp_sessions()` はこのグローバルディレクトリからも my-quick-feed 由来セッションを削除する（プレフィックス: `-AppData-Local-Temp-my-quick-feed-omp` / `--D--quickfeed` / `abs-my-quick-feed-`）。他プロジェクトのセッションには触れない。
+   - **重要（2026-08-03 実測）**: セッションは **`%USERPROFILE%\.omp\agent\sessions\`（グローバル）にも作られ、実行のたびに溜まり続ける**。ディレクトリ名は cwd パス由来。`cleanup_omp_sessions()` はこのグローバルディレクトリからもこのアプリの OMP 実行由来セッションを削除する（旧命名はプレフィックス一致: `-AppData-Local-Temp-my-quick-feed-omp` / `--D--quickfeed`、**新命名 `abs-<basename>-<sha256>` は完全一致のみ**。アプリ自身の実行は `abs-omp-<sha256(%TEMP%\my-quick-feed\omp を前方スラッシュ化)>` になる）。他プロジェクトのセッションには触れない。
+   - **⚠ 重大な教訓（2026-08-03、実害あり）**: `abs-my-quick-feed-` のプレフィックス一致で削除すると、**ユーザーが `D:\学校\app\my-quick-feed` で対話的に使っている本物のセッションまで削除する**（`abs-my-quick-feed-c363672c…` = ユーザー作業ディレクトリの cwd ハッシュ。2026-07-15 の初期構築セッションがこのバグで消えた）。絶対にプレフィックス一致に戻さないこと。
+   - **復元方法（実績あり 2026-08-03）**: `.jsonl` が消えても `~/.omp/agent/history.db` の `history` テーブル（`session_id` 列）にユーザーメッセージ全文が残っている。同IDの `.jsonl` を `title` / `session`(version 3) / `model_change` / `thinking_level_change` / `message` / `title_change` の行形式で再構築すれば resume 可能（検証は `omp --export <file> <out.html>` でロード確認）。
 6. **コマンドライン長制限** → Windows は 8191 文字まで。プロンプトが 30〜70KB になるので **必ず `@file` 方式** を使う。
 7. **`tokio::process::Command` を使うこと（重大）**。`std::process::Command::output()` はブロッキングで `tokio::time::timeout` が効かず、OMP ハング時にアプリ全体が固まる。`tokio::process::Command` + `kill_on_drop(true)` + `tokio::time::timeout` で、タイムアウト時に子プロセスを kill する（実装済み）。
 8. **`-p` モードで複数 @file を渡すとハングする**（2ファイル方式は不可・実測）。プロンプトに記事リストを埋め込む 1ファイル方式にすること（実装済み）。
