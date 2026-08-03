@@ -197,6 +197,27 @@ async fn run_omp_direct(prompt: &str, model: &str) -> AppResult<Vec<ArticleResul
     parse_omp_output(output)
 }
 
+/// OMP のグローバルセッションディレクトリ名を計算する。
+/// OMP は cwd を前方スラッシュに正規化した SHA-256 を使い、
+/// `abs-<basename>-<sha256hex>` の名前でセッションディレクトリを作る（実測・検証済み）。
+/// 例: cwd = D:\学校\app\my-quick-feed → abs-my-quick-feed-c363672c5617d…
+///
+/// ⚠ 絶対に `abs-my-quick-feed-` のようなプレフィックス一致にしてはいけない。
+/// その名前は「このアプリの OMP 実行」ではなく、ユーザーが D:\学校\app\my-quick-feed で
+/// 対話的に使っている本物のセッションディレクトリを指す（2026-08-03 実害あり）。
+/// アプリ自身の OMP 実行（cwd = %TEMP%\my-quick-feed\omp）のディレクトリ名は
+/// `abs-omp-<sha256>` になるため、完全一致で判定する。
+fn omp_abs_session_dir_name(work: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+    let normalized = work.to_string_lossy().replace('\\', "/");
+    let hash = Sha256::digest(normalized.as_bytes());
+    let base = work
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "omp".to_string());
+    format!("abs-{}-{:x}", base, hash)
+}
+
 /// セッションディレクトリをクリーンアップ（アプリ起動時・パイプライン実行前に呼ぶ）
 pub fn cleanup_omp_sessions() {
     let mut removed = 0usize;
@@ -213,19 +234,22 @@ pub fn cleanup_omp_sessions() {
 
     // 2) OMP のグローバルセッションディレクトリ（%USERPROFILE%\.omp\agent\sessions）。
     //    OMP は cwd に関係なくセッションをここに保存するため、実行のたびに溜まり続ける。
-    //    my-quick-feed 由来のセッション（ディレクトリ名がパスから生成される）だけを削除する。
+    //    このアプリの OMP 実行（cwd = %TEMP%\my-quick-feed\omp）由来のセッションだけを削除する。
+    //    旧命名（-AppData-Local-Temp-my-quick-feed-omp / --D--quickfeed）はプレフィックス一致、
+    //    新命名（abs-<basename>-<sha256>）は完全一致で判定する（プレフィックス一致は実害あり・上記参照）。
     let global = std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(omp_work_dir)
         .join(".omp")
         .join("agent")
         .join("sessions");
+    let abs_name = omp_abs_session_dir_name(&omp_work_dir());
     if let Ok(entries) = std::fs::read_dir(&global) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let is_mqf = name.starts_with("-AppData-Local-Temp-my-quick-feed-omp")
                 || name.starts_with("--D--quickfeed")
-                || name.starts_with("abs-my-quick-feed-");
+                || name == abs_name;
             if is_mqf && std::fs::remove_dir_all(entry.path()).is_ok() {
                 removed += 1;
             }
