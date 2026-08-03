@@ -199,17 +199,41 @@ async fn run_omp_direct(prompt: &str, model: &str) -> AppResult<Vec<ArticleResul
 
 /// セッションディレクトリをクリーンアップ（アプリ起動時・パイプライン実行前に呼ぶ）
 pub fn cleanup_omp_sessions() {
+    let mut removed = 0usize;
+
+    // 1) ローカル作業ディレクトリ配下のセッション
     let sessions = omp_work_dir().join(".omp").join("agent").join("sessions");
     if let Ok(entries) = std::fs::read_dir(&sessions) {
-        let mut removed = 0usize;
         for entry in entries.flatten() {
             if std::fs::remove_dir_all(entry.path()).is_ok() {
                 removed += 1;
             }
         }
-        if removed > 0 {
-            info!("Cleaned {} OMP session(s) in {:?}", removed, sessions);
+    }
+
+    // 2) OMP のグローバルセッションディレクトリ（%USERPROFILE%\.omp\agent\sessions）。
+    //    OMP は cwd に関係なくセッションをここに保存するため、実行のたびに溜まり続ける。
+    //    my-quick-feed 由来のセッション（ディレクトリ名がパスから生成される）だけを削除する。
+    let global = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(omp_work_dir)
+        .join(".omp")
+        .join("agent")
+        .join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&global) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_mqf = name.starts_with("-AppData-Local-Temp-my-quick-feed-omp")
+                || name.starts_with("--D--quickfeed")
+                || name.starts_with("abs-my-quick-feed-");
+            if is_mqf && std::fs::remove_dir_all(entry.path()).is_ok() {
+                removed += 1;
+            }
         }
+    }
+
+    if removed > 0 {
+        info!("Cleaned {} OMP session(s)", removed);
     }
 }
 
