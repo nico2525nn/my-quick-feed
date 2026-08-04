@@ -90,6 +90,7 @@ rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
 2. **`cargo test` は実行できない**（MinGW リンカの制約）。`--exclude-all-symbols` を付けるとテストバイナリが起動時 0xc0000139 でクラッシュ、外すと「export ordinal too large」でリンク失敗。テストは `cargo check` + ブラウザ検証 + 実機パイプライン検証で代替する。
 3. **PowerShell の変数展開が埋め込みシェルで壊れる**（`$var` が消える）。複雑な処理は .ps1/.cmd ファイルに書いて `powershell -ExecutionPolicy Bypass -File xxx.ps1` で実行する。
 4. **PowerShell 5.1 は BOM なし UTF-8 の ps1 内の日本語を読めない**。ps1 に日本語を書く場合は注意。ASCII のみにするか UTF-8 BOM 付きで保存する。
+5. **bat ファイルに日本語を書かない（2026-08-04 実害あり）**。UTF-8 で保存した bat の日本語コメント/echo は、cmd がコードページ 932（Shift-JIS）で読み込むため文字化けし、**後続の行（call やパス指定）まで壊れる**（`'[INFO]' is not recognized` エラー、run.bat が動かない）。bat は**完全に ASCII のみ**で書くこと。D:\学校 の run.bat（ラッパー）は ASCII 化済み。
 5. **`findstr` は 769 バイトで出力が切れる**。minified な JS/CSS の検索には不向き。`Select-String`（PowerShell）を使う。
 
 ### 2.5 MinGW のヘッダー修復（2026-07-31 実績）
