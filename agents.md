@@ -84,6 +84,8 @@ rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
 ```
 **`--exclude-all-symbols` がないと MinGW の ld が「export ordinal too large」でリンクに失敗する**（PEフォーマットの制限、エクスポート順序が 65535 を超える）。絶対に消さないこと。
 
+**⚠ `custom-protocol` feature 必須（2026-08-04 実害あり）**: `Cargo.toml` の tauri 依存は `features = ["tray-icon", "custom-protocol"]` であること。`tauri build`（tauri-cli）は自動で custom-protocol を有効化するが、**素の `cargo build --release`（run.bat の方式）は feature を付けない**。custom-protocol が無いと dev モードでビルドされ、WebView が `devUrl`（localhost:1420）をロードしようとして「localhost 接続が拒否されました」になる（vite dev が動いていないため）。run.bat でビルドする限り、**この feature が無いと UI が一切表示されない**。
+
 ### 2.4 環境トラップ（実測済み・最重要）
 
 1. **埋め込みシェルでは `cd` が効かない**。`cmd /c "cd /d D:\quickfeed && ..."` を実行しても、カレントディレクトリが変わらない（D:\学校 のまま）。**必ずツールの cwd パラメータで `D:\quickfeed`（または `D:\quickfeed\src-tauri`）を指定すること**。指定しないと日本語パス側でビルドされ、node_modules 不足やリンカエラーが起きる。
