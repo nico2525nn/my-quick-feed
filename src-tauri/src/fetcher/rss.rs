@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
+
 use chrono::{DateTime, Utc};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -20,6 +24,28 @@ pub struct Feed {
     pub items: Vec<FeedItem>,
 }
 
+/// レート制限対策のフィードキャッシュ（メモリ内）。
+/// Reddit は 1 分あたり 1 リクエスト程度の厳しい制限があり、429 で全リトライが
+/// 失敗しても、前回取得できていたフィードがあればそれを使ってパイプラインを継続する。
+/// キャッシュは正常取得のたびに更新される（古いフィードでも記事生成には十分使える）。
+static FEED_CACHE: LazyLock<Arc<Mutex<HashMap<String, (Feed, SystemTime)>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// 429 応答から待機時間（秒）を決定する。
+/// Retry-After ヘッダー → x-ratelimit-reset ヘッダー（Reddit が使う）→ バックオフ。
+fn rate_limit_wait_secs(response: &reqwest::Response, attempt: u64) -> u64 {
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+    };
+    header("retry-after")
+        .or_else(|| header("x-ratelimit-reset"))
+        .unwrap_or(5 * (attempt + 1))
+}
+
 pub async fn fetch_feed(url: &str) -> AppResult<Feed> {
     // Reddit は http だと 429 になるため https に置換
     let url = if url.starts_with("http://www.reddit.com/") || url.starts_with("http://reddit.com/") {
@@ -35,20 +61,15 @@ pub async fn fetch_feed(url: &str) -> AppResult<Feed> {
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    // 429（レート制限）対策: 最大5回リトライ（Retry-After 尊重、無ければ 5s/10s/15s/20s/25s バックオフ）
+    // 429（レート制限）対策: 最大5回リトライ
+    // （Retry-After / x-ratelimit-reset 尊重、無ければ 5s/10s/15s/20s/25s バックオフ）
     let mut last_err: Option<AppError> = None;
     for attempt in 0..5 {
         let response = client.get(url.as_str()).send().await?;
         let status = response.status();
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            // Retry-After ヘッダーを尊重
-            let wait = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(5 * (attempt as u64 + 1));
+            let wait = rate_limit_wait_secs(&response, attempt);
             warn!(
                 "Rate limited (429) for {}, retry in {}s (attempt {}/5)",
                 url, wait, attempt + 1
@@ -74,7 +95,29 @@ pub async fn fetch_feed(url: &str) -> AppResult<Feed> {
             body.len(),
             status
         );
-        return parse_feed(&body);
+        let feed = parse_feed(&body)?;
+        // 正常取得できたフィードをキャッシュ（次回 429 時のフォールバック用）
+        FEED_CACHE
+            .lock()
+            .unwrap()
+            .insert(url.clone(), (feed.clone(), SystemTime::now()));
+        return Ok(feed);
+    }
+
+    // 全リトライ失敗時: 以前に取得できたキャッシュがあればそれを使う
+    // （古いフィードでも、直近タイトルとの重複照合で記事生成には十分使える）
+    if let Some((feed, fetched_at)) = FEED_CACHE.lock().unwrap().get(url.as_str()) {
+        let age_mins = SystemTime::now()
+            .duration_since(*fetched_at)
+            .map(|d| d.as_secs() / 60)
+            .unwrap_or(0);
+        warn!(
+            "Rate limited and retries exhausted for {}, using cached feed ({} min old, {} items)",
+            url,
+            age_mins,
+            feed.items.len()
+        );
+        return Ok(feed.clone());
     }
 
     Err(last_err.unwrap_or_else(|| {

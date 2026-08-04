@@ -16,6 +16,8 @@ pub struct Pipeline {
     config_manager: Arc<ConfigManager>,
     db: Arc<Database>,
     discord: Option<Arc<DiscordClient>>,
+    /// false なら Discord 投稿・DB 保存をしない（--no-post ドライラン）
+    post_enabled: bool,
 }
 
 impl Pipeline {
@@ -23,8 +25,9 @@ impl Pipeline {
         config_manager: Arc<ConfigManager>,
         db: Arc<Database>,
         discord: Option<Arc<DiscordClient>>,
+        post_enabled: bool,
     ) -> Self {
-        Self { config_manager, db, discord }
+        Self { config_manager, db, discord, post_enabled }
     }
 
     pub async fn run(&self, topic: &TopicConfig) -> AppResult<()> {
@@ -168,8 +171,30 @@ impl Pipeline {
         }
 
         // Step 4: Post each article（通常メッセージ・Markdown、Embed枠なし）
+        if !self.post_enabled {
+            // ドライラン（--no-post）: 投稿も DB 保存もしない。
+            // DB に保存すると直近タイトルの重複防止リストに入り、後で実際に投稿できなくなるため。
+            info!(topic = %tn, "投稿無効（--no-post）: 生成記事をログに出力のみ");
+            for (i, a) in articles.iter().enumerate() {
+                let chars = a.content.chars().count();
+                let preview: String = a.content.chars().take(150).collect();
+                let suffix = if chars > 150 { "…" } else { "" };
+                info!(
+                    topic = %tn,
+                    "  記事[{}]: \"{}\" — {}{}",
+                    i + 1, a.title, preview, suffix
+                );
+            }
+            return Ok(());
+        }
+
         if let Some(discord) = &self.discord {
-            let dc = config.discord.clone();
+            // トピック専用のフォーラムチャンネルがあればそれを使う（無ければグローバル設定）
+            let mut dc = config.discord.clone();
+            if let Some(ch) = topic.forum_channel_id.as_deref().filter(|c| !c.is_empty()) {
+                dc.forum_channel_id = ch.to_string();
+                info!(topic = %tn, "トピック専用チャンネル使用: {}", ch);
+            }
             let thread_id = match self.db.get_topic_thread(tn) {
                 Ok(opt) => opt,
                 Err(e) => {

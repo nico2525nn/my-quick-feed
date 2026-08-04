@@ -14,6 +14,7 @@ interface TopicConfig {
   system_prompt: string | null;
   image_search_enabled: boolean | null;
   research_enabled: boolean | null;
+  forum_channel_id: string | null;
 }
 
 interface AppConfig {
@@ -58,6 +59,7 @@ function emptyTopic(): TopicConfig {
     system_prompt: null,
     image_search_enabled: true,
     research_enabled: true,
+    forum_channel_id: null,
   };
 }
 
@@ -350,6 +352,18 @@ export default function TopicsPage() {
                   }
                 />
               </div>
+            </div>
+
+            <div className="form-group">
+              <label>Forum Channel ID（省略時は Settings のグローバル設定）</label>
+              <input
+                className="form-input"
+                value={editing.forum_channel_id ?? ""}
+                onChange={(e) =>
+                  updateEditing({ forum_channel_id: e.target.value || null })
+                }
+                placeholder="例: 1234567890123456789（空ならグローバル設定を使用）"
+              />
             </div>
 
             <div className="form-group">

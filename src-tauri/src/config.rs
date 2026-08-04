@@ -44,6 +44,9 @@ pub struct TopicConfig {
     pub system_prompt: Option<String>,
     pub image_search_enabled: Option<bool>,
     pub research_enabled: Option<bool>,
+    /// トピック専用のフォーラムチャンネル ID（未指定なら discord.forum_channel_id を使う）
+    #[serde(default)]
+    pub forum_channel_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

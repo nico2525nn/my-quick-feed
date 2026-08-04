@@ -252,7 +252,7 @@ async fn export_logs(state: tauri::State<'_, AppState>) -> Result<String, String
 }
 /// ===== App Entry Point =====
 
-pub fn run() {
+pub fn run(post_enabled: bool) {
     // tracing subscriber: stdout + ファイル + LogCaptureLayer
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -307,7 +307,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .setup(|app| {
+        .setup(move |app| {
             info!("Starting My Quick Feed...");
 
             let app_data_dir = app
@@ -348,6 +348,7 @@ pub fn run() {
                 config_manager.clone(),
                 db.clone(),
                 discord,
+                post_enabled,
             ));
 
             let scheduler = Arc::new(Scheduler::new(config_manager.clone(), pipeline.clone()));

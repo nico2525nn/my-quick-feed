@@ -35,5 +35,5 @@ if errorlevel 1 (
 
 echo [3/3] Launching...
 set "BIN=src-tauri\target\release\my-quick-feed.exe"
-start "" /B "%BIN%"
+start "" /B "%BIN%" %*
 echo [OK] My Quick Feed started (system tray)

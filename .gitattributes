@@ -1,0 +1,2 @@
+# bat ファイルは cmd が CRLF を期待するため、常に CRLF でチェックアウトする
+*.bat text eol=crlf
