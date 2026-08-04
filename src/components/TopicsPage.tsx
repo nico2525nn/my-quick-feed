@@ -44,6 +44,9 @@ interface TopicSession {
   created_at: string;
   prompt_preview: string;
   response_preview: string;
+  prompt_full: string;
+  response_full: string;
+  thinking_full: string;
 }
 
 interface TopicDetail {
@@ -601,40 +604,92 @@ export default function TopicsPage() {
                     <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
                       {s.created_at}
                     </div>
-                    <div style={{ fontSize: 12, marginBottom: 4 }}>
-                      <span className="tag tag-blue">プロンプト</span>
-                    </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        fontSize: 11,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-all",
-                        color: "var(--text-secondary)",
-                        background: "var(--bg-primary)",
-                        borderRadius: "var(--radius-sm)",
-                        padding: 8,
-                      }}
-                    >
-                      {s.prompt_preview}
-                    </pre>
-                    <div style={{ fontSize: 12, marginTop: 8, marginBottom: 4 }}>
-                      <span className="tag tag-green">回答</span>
-                    </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        fontSize: 11,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-all",
-                        color: "var(--text-secondary)",
-                        background: "var(--bg-primary)",
-                        borderRadius: "var(--radius-sm)",
-                        padding: 8,
-                      }}
-                    >
-                      {s.response_preview}
-                    </pre>
+                    <details style={{ marginBottom: 8 }}>
+                      <summary
+                        style={{
+                          fontSize: 12,
+                          cursor: "pointer",
+                          color: "var(--accent-blue)",
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span className="tag tag-blue">プロンプト</span> 展開して全文を見る
+                      </summary>
+                      <pre
+                        style={{
+                          margin: 0,
+                          fontSize: 11,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
+                          color: "var(--text-secondary)",
+                          background: "var(--bg-primary)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: 8,
+                          maxHeight: 300,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {s.prompt_full || s.prompt_preview}
+                      </pre>
+                    </details>
+                    <details style={{ marginBottom: 8 }}>
+                      <summary
+                        style={{
+                          fontSize: 12,
+                          cursor: "pointer",
+                          color: "var(--accent-green)",
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span className="tag tag-green">回答</span> 展開して全文を見る
+                      </summary>
+                      <pre
+                        style={{
+                          margin: 0,
+                          fontSize: 11,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
+                          color: "var(--text-secondary)",
+                          background: "var(--bg-primary)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: 8,
+                          maxHeight: 400,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {s.response_full || s.response_preview}
+                      </pre>
+                    </details>
+                    {s.thinking_full && (
+                      <details style={{ marginBottom: 8 }}>
+                        <summary
+                          style={{
+                            fontSize: 12,
+                            cursor: "pointer",
+                            color: "var(--accent-yellow)",
+                            marginBottom: 4,
+                          }}
+                        >
+                          <span className="tag tag-yellow">思考ログ</span> 展開して全文を見る
+                        </summary>
+                        <pre
+                          style={{
+                            margin: 0,
+                            fontSize: 11,
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-all",
+                            color: "var(--text-muted)",
+                            background: "var(--bg-primary)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: 8,
+                            maxHeight: 400,
+                            overflowY: "auto",
+                          }}
+                        >
+                          {s.thinking_full}
+                        </pre>
+                      </details>
+                    )}
                   </div>
                 ))
               )}

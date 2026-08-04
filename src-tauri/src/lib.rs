@@ -166,6 +166,12 @@ struct TopicDetailSession {
     created_at: String,
     prompt_preview: String,
     response_preview: String,
+    /// プロンプト全文
+    prompt_full: String,
+    /// 回答全文
+    response_full: String,
+    /// 思考ログ（--thinking が記録されていれば）
+    thinking_full: String,
 }
 
 /// トピック詳細画面用のデータ（設定・投稿ニュース・セッション履歴）
@@ -216,6 +222,8 @@ fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
         let mut first_user_ts: Option<String> = None;
         let mut first_user_prompt: Option<String> = None;
         let mut last_assistant: Option<String> = None;
+        // 思考ログ（assistant の thinking パーツを連結）
+        let mut thinking_parts: Vec<String> = Vec::new();
         for line in content.lines() {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             if value.get("type").and_then(|t| t.as_str()) != Some("message") {
@@ -231,6 +239,19 @@ fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
                 .unwrap_or("")
                 .to_string();
             let text = message_text(message.get("content"));
+            // thinking / reasoning パーツの抽出
+            if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
+                for part in content {
+                    let kind = part.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if kind == "thinking" || kind == "reasoning" || kind == "thinking_delta" {
+                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                            if !t.trim().is_empty() {
+                                thinking_parts.push(t.to_string());
+                            }
+                        }
+                    }
+                }
+            }
             match role {
                 "user" => {
                     if first_user_prompt.is_none() {
@@ -255,12 +276,17 @@ fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
             .as_deref()
             .map(local_time_string)
             .unwrap_or_default();
+        let response = last_assistant.unwrap_or_default();
+        let thinking = thinking_parts.join("\n---\n");
         found.push((
             first_user_ts.unwrap_or_default(),
             TopicDetailSession {
                 created_at,
                 prompt_preview: truncate_preview(&prompt),
-                response_preview: truncate_preview(&last_assistant.unwrap_or_default()),
+                response_preview: truncate_preview(&response),
+                prompt_full: strip_file_wrapper(&prompt),
+                response_full: response,
+                thinking_full: thinking,
             },
         ));
     }
@@ -268,6 +294,17 @@ fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
     found.sort_by(|a, b| b.0.cmp(&a.0));
     found.truncate(10);
     found.into_iter().map(|(_, s)| s).collect()
+}
+
+/// omp がプロンプトに付ける `<file name="...">` ラッパーを除去する
+fn strip_file_wrapper(s: &str) -> String {
+    let t = s.trim();
+    if t.starts_with("<file name=") {
+        if let Some(end) = t.find('>') {
+            return t[end + 1..].trim().to_string();
+        }
+    }
+    t.to_string()
 }
 
 /// message.content（文字列 or パーツ配列）からテキストを抽出する。
