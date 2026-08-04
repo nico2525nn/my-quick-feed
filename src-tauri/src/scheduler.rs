@@ -44,6 +44,11 @@ impl Scheduler {
         self.next_runs.lock().clone()
     }
 
+    /// 現在パイプライン実行中のトピック名一覧（Dashboard の実行中表示用）
+    pub async fn get_running_topics(&self) -> Vec<String> {
+        self.running.lock().await.keys().cloned().collect()
+    }
+
     pub async fn start_topic(&self, topic: &TopicConfig) {
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.remove(&topic.name) {

@@ -207,6 +207,8 @@ struct AppStatus {
     running: bool,
     /// トピック名 → 次回実行予定時刻（ISO8601、実行なしは null）
     topic_next_fetch: std::collections::HashMap<String, String>,
+    /// 現在パイプライン実行中のトピック名一覧
+    topic_running: Vec<String>,
 }
 
 #[tauri::command]
@@ -217,7 +219,8 @@ async fn get_status(state: tauri::State<'_, AppState>) -> Result<AppStatus, Stri
         .into_iter()
         .map(|(k, v)| (k, v.to_rfc3339()))
         .collect();
-    Ok(AppStatus { running, topic_next_fetch })
+    let topic_running = state.scheduler.get_running_topics().await;
+    Ok(AppStatus { running, topic_next_fetch, topic_running })
 }
 
 #[tauri::command]

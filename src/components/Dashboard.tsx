@@ -23,6 +23,7 @@ interface TopicStat {
 interface AppStatus {
   running: boolean;
   topic_next_fetch: Record<string, string>;
+  topic_running: string[];
 }
 
 interface PostSummary {
@@ -257,11 +258,15 @@ export default function Dashboard() {
                   <span title={st?.last_post_at ?? ""}>
                     {"\u{1F551}"} Last: {fmtLastTime(st?.last_post_at)}
                   </span>
-                  {next && (
-                    <span className="tag tag-green">
-                      {"\u{23F1}"} Next in {fmtRelative(next)}
+                  {status?.topic_running.includes(topic.name) ? (
+                    <span className="tag tag-yellow" title="パイプライン実行中">
+                      {"\u23F3"} 実行中...
                     </span>
-                  )}
+                  ) : next ? (
+                    <span className="tag tag-green">
+                      {"\u23F1"} Next in {fmtRelative(next)}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             );
