@@ -25,10 +25,12 @@
 
 ```
 1. D:\学校\app\my-quick-feed でソース編集 → git commit
-2. D:\quickfeed にソースを同期: robocopy D:\学校\app\my-quick-feed D:\quickfeed /MIR /XD target node_modules dist .git /NFL /NDL /NJH /NJS
+2. D:\quickfeed にソースを同期: robocopy D:\学校\app\my-quick-feed D:\quickfeed /MIR /XD target node_modules dist .git /XF run.bat /NFL /NDL /NJH /NJS
 3. D:\quickfeed でビルド・テスト（cwd パラメータで D:\quickfeed を指定）
 4. run.bat は D:\quickfeed のものを実行（D:\学校 の run.bat はラッパー）
 ```
+
+**⚠ run.bat は同期から除外すること（/XF run.bat）**: D:\学校 の run.bat はラッパー（D:\quickfeed を呼ぶだけ）。/MIR 同期でラッパーが D:\quickfeed の本体 run.bat を上書きすると、run.bat が自分自身を call する無限ループになり「動かない」（2026-08-04 実害あり・修正済み）。
 
 ---
 
@@ -47,11 +49,17 @@
 | ツール | パス | 用途 |
 |---|---|---|
 | Rust (GNU) | `C:\Users\nico\.cargo\bin\rustc.exe` | **stable-x86_64-pc-windows-gnu** をデフォルトに |
-| MinGW-w64 | `C:\msys64\mingw64\bin\gcc.exe` | Cリンカ |
+| MinGW-w64 | `C:\msys64\mingw64\bin\gcc.exe` | Cリンカ（WinLibs 16.1.0、2026-08-04 再展開） |
 | LLVM (lld-link) | `C:\Program Files\LLVM\bin\lld-link.exe` | 代替リンカ（MSVC用、未使用） |
 | Node.js | `C:\Users\nico\AppData\Roaming\npm` | フロントエンド |
 | Git | `C:\Program Files\Git\cmd\git.exe` | リポジトリ管理 |
 | OMP | PATH 上（`omp --help` で確認可能） | AIエージェント |
+
+**⚠ MinGW 消失事件（2026-08-04）**: `C:\msys64` が丸ごと消えていた（原因不明。当日のビルド時点では存在）。run.bat が `[ERROR] MinGW not found` で失敗する。復元手順:
+1. WinLibs の zip をダウンロード（GitHub: brechtsanders/winlibs_mingw、`winlibs-x86_64-posix-seh-gcc-*-mingw-w64msvcrt-*.zip` を選択）
+2. `mkdir C:\msys64` → `C:\Windows\System32\tar.exe -xf winlibs.zip -C C:\msys64`（Windows 標準 tar は zip 展開可）
+3. `C:\msys64\mingw64\bin\gcc.exe --version` で確認 → ビルド再開
+- 消えたら run.bat のエラーメッセージで気づく。.cargo/config.toml の linker パスはそのままで OK（同じ場所に展開するため）。
 
 ### 2.3 ビルドコマンド
 
