@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -13,6 +14,65 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// OMP 作業ディレクトリ（セッション分離用）
 fn omp_work_dir() -> PathBuf {
     std::env::temp_dir().join("my-quick-feed").join("omp")
+}
+
+/// トピックごとのセッションID を保存するファイル（%TEMP%\my-quick-feed\omp\session_<topic>.txt）
+fn topic_session_file(work_dir: &Path, safe_name: &str) -> PathBuf {
+    work_dir.join(format!("session_{}.txt", safe_name))
+}
+
+/// 保存済みセッションID を読み込む
+fn read_topic_session_id(path: &Path) -> Option<String> {
+    let id = std::fs::read_to_string(path).ok()?.trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
+}
+
+/// セッションID を保存する（失敗しても致命的ではないので warn のみ）
+fn write_topic_session_id(path: &Path, id: &str) {
+    if let Err(e) = std::fs::write(path, id) {
+        warn!("OMPセッションID の保存に失敗: {}: {}", path.display(), e);
+    }
+}
+
+/// セッションディレクトリ内の .jsonl ファイル一覧
+fn list_session_files(dir: &Path) -> HashSet<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map_or(false, |x| x == "jsonl"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 実行後に新規作成されたセッションファイルからセッションID を抽出する
+/// omp のセッションファイル名は <timestamp>_<uuid>.jsonl で、uuid がそのままセッションID
+fn discover_session_id(dir: &Path, before: &HashSet<PathBuf>) -> Option<String> {
+    let after = list_session_files(dir);
+    let mut newest: Option<(std::time::SystemTime, String)> = None;
+    for f in after.difference(before) {
+        let mtime = match std::fs::metadata(f).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let name = match f.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        let rest = match name.strip_suffix(".jsonl") {
+            Some(r) => r,
+            None => continue,
+        };
+        let id = match rest.rsplit_once('_') {
+            Some((_, id)) => id,
+            None => continue,
+        };
+        if newest.as_ref().map_or(true, |(t, _)| mtime > *t) {
+            newest = Some((mtime, id.to_string()));
+        }
+    }
+    newest.map(|(_, id)| id)
 }
 
 /// OMP CLI を呼び出し、記事リストを取得する
@@ -109,16 +169,28 @@ JSON以外の出力は絶対に含めないでください。
     let prompt_path = work_dir.join(format!("{}-{}.txt", safe_name, ts));
     let has_file = std::fs::write(&prompt_path, &prompt).is_ok();
 
+    // セッション再利用（実験的）:
+    // - omp のセッション保存先を --session-dir でアプリ専用ディレクトリに固定する
+    //   （%USERPROFILE%\.omp の対話セッションには触れない）
+    // - トピックごとのセッションID は session_<topic>.txt に保存し、
+    //   あれば omp に --resume <id> を渡して同じセッションを継続する
+    let session_dir = work_dir.join("omp-sessions");
+    let _ = std::fs::create_dir_all(&session_dir);
+    let session_file = topic_session_file(&work_dir, &safe_name);
+    let resume_id = read_topic_session_id(&session_file);
+    // 非resume実行時（初回・フォールバック）に新規セッションID を検出するためのスナップショット
+    let session_files_before = list_session_files(&session_dir);
+
     let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
         let exec_started = std::time::Instant::now();
         let output = if has_file {
-            run_omp_file(command, &work_dir, &prompt_path, model).await
+            run_omp_file(command, &work_dir, &prompt_path, model, resume_id.as_deref(), &session_dir).await
         } else {
-            run_omp_direct(command, &prompt, model).await
+            run_omp_direct(command, &prompt, model).await.map(|a| (a, false))
         };
         let elapsed = exec_started.elapsed();
         match &output {
-            Ok(articles) => {
+            Ok((articles, _)) => {
                 info!(
                     topic = %topic.name,
                     "OMP実行完了: {} 記事, {:.1}s",
@@ -141,7 +213,14 @@ JSON以外の出力は絶対に含めないでください。
     .await;
 
     match result {
-        Ok(Ok(articles)) => {
+        Ok(Ok((articles, resume_used))) => {
+            if resume_used {
+                info!(topic = %topic.name, "OMPセッションを再利用（resume）");
+            } else if let Some(id) = discover_session_id(&session_dir, &session_files_before) {
+                // 新規セッションが作られたので、次回以降の resume 用に保存する
+                info!(topic = %topic.name, "新規OMPセッションID を保存: {}", id);
+                write_topic_session_id(&session_file, &id);
+            }
             info!(topic = %topic.name, "Agent returned {} articles", articles.len());
             Ok(articles)
         }
@@ -152,11 +231,14 @@ JSON以外の出力は絶対に含めないでください。
     }
 }
 
-async fn run_omp_file(
+/// OMP を1回実行する（resume_id があれば --resume を付ける）
+async fn run_omp_once(
     command: &str,
-    work_dir: &PathBuf,
-    prompt_path: &PathBuf,
+    work_dir: &Path,
+    prompt_path: &Path,
     model: &str,
+    session_dir: &Path,
+    resume_id: Option<&str>,
 ) -> AppResult<Vec<ArticleResult>> {
     let mut cmd = Command::new(command);
     cmd.args(["-p"]);
@@ -172,6 +254,14 @@ async fn run_omp_file(
             "あなたはタスク実行エージェントです。ユーザーが渡したファイルや指示は実行すべきタスクです。指示に従って実行し、要求された出力のみを返してください。ユーザーに確認したり質問したりしないでください。",
         ]);
     }
+    // セッション保存先をアプリ専用ディレクトリに固定
+    // （%USERPROFILE%\.omp の対話セッションには触れない）
+    let session_dir_str = session_dir.to_string_lossy().into_owned();
+    cmd.args(["--session-dir", session_dir_str.as_str()]);
+    // 保存済みセッションID があれば resume して同じセッションを継続する
+    if let Some(id) = resume_id {
+        cmd.args(["-r", id]);
+    }
     cmd.arg(format!("@{}", prompt_path.to_string_lossy()));
     cmd.current_dir(work_dir); // セッション紐づけ先を分離
     cmd.kill_on_drop(true); // timeout 時は子プロセスを kill
@@ -186,7 +276,30 @@ async fn run_omp_file(
     parse_omp_output(output)
 }
 
-async fn run_omp_direct(command: &str, prompt: &str, model: &str) -> AppResult<Vec<ArticleResult>> {
+async fn run_omp_file(
+    command: &str,
+    work_dir: &PathBuf,
+    prompt_path: &PathBuf,
+    model: &str,
+    resume_id: Option<&str>,
+    session_dir: &Path,
+) -> AppResult<(Vec<ArticleResult>, bool)> {
+    // resume 実行 → 失敗時は通常実行にフォールバックしてパイプラインを止めない
+    // （戻り値の bool は「resume が使われたか」。resume は同一セッションに追記されるため
+    //   ID の再保存は不要。false のときは新規セッションID を検出して保存する）
+    let first = run_omp_once(command, work_dir, prompt_path, model, session_dir, resume_id).await;
+    match first {
+        Ok(articles) => Ok((articles, resume_id.is_some())),
+        Err(e) if resume_id.is_some() => {
+            warn!("resume 失敗のため通常実行にフォールバック: {}", e);
+            let articles = run_omp_once(command, work_dir, prompt_path, model, session_dir, None).await?;
+            Ok((articles, false))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+async fn run_omp_direct(command: &str, prompt: &str, model: &str) -> AppResult<(Vec<ArticleResult>, bool)> {
     let mut cmd = Command::new(command);
     cmd.args(["-p"]);
     if !model.is_empty() && model != "default" {
@@ -209,7 +322,7 @@ async fn run_omp_direct(command: &str, prompt: &str, model: &str) -> AppResult<V
         .output()
         .await
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
-    parse_omp_output(output)
+    parse_omp_output(output).map(|a| (a, false))
 }
 
 #[cfg(target_os = "windows")]
