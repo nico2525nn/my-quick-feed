@@ -39,6 +39,8 @@ export default function Dashboard() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [recentPosts, setRecentPosts] = useState<PostSummary[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  // 実行中（Refresh 中）のトピック名（ボタンのフィードバック用）
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
   const toastTimerRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
 
@@ -107,6 +109,8 @@ export default function Dashboard() {
   }, []);
 
   const handleRefresh = async (topicName: string) => {
+    if (refreshing.has(topicName)) return;
+    setRefreshing((prev) => new Set(prev).add(topicName));
     try {
       await invoke("refresh_topic", { topicName });
       showToast("Refreshed: " + topicName, true);
@@ -115,6 +119,12 @@ export default function Dashboard() {
       }, 1500);
     } catch (e) {
       showToast("Refresh failed: " + e, false);
+    } finally {
+      setRefreshing((prev) => {
+        const next = new Set(prev);
+        next.delete(topicName);
+        return next;
+      });
     }
   };
 
@@ -231,9 +241,10 @@ export default function Dashboard() {
                   <button
                     className="btn btn-sm"
                     onClick={() => handleRefresh(topic.name)}
+                    disabled={refreshing.has(topic.name)}
                     title="Fetch and generate now"
                   >
-                    {"\u{1F504}"} Refresh
+                    {"\u{1F504}"} {refreshing.has(topic.name) ? "Refreshing..." : "Refresh"}
                   </button>
                 </div>
                 <div className="topic-card-meta">

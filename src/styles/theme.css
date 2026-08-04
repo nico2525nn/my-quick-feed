@@ -526,6 +526,7 @@ body {
   padding: 12px;
   height: 400px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .log-entry {
@@ -533,27 +534,43 @@ body {
   display: flex;
   gap: 8px;
   line-height: 1.6;
+  align-items: flex-start;
 }
 
 .log-time {
   color: var(--text-muted);
   white-space: nowrap;
   min-width: 80px;
+  flex-shrink: 0;
 }
 
 .log-level {
   white-space: nowrap;
   min-width: 48px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .log-level.INFO { color: var(--accent-blue); }
 .log-level.WARN { color: var(--accent-yellow); }
 .log-level.ERROR { color: var(--accent-red); }
 
+/* トピックは折り返さず、長すぎる場合は省略表示（メッセージ列の圧迫防止） */
+.log-topic {
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* メッセージが残りの幅を全て使い、折り返して収まるようにする。
+   単語途中の切れは最小限に（長い URL など必要な場合のみ） */
 .log-message {
   color: var(--text-primary);
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  flex: 1 1 0%;
+  min-width: 0;
 }
 
 /* Settings sections */

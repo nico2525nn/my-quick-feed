@@ -12,9 +12,16 @@ export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("ALL");
   const [autoScroll, setAutoScroll] = useState(true);
-  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const exportTimerRef = useRef<number | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
+
+  const showExportMsg = (ok: boolean, text: string) => {
+    setExportMsg({ ok, text });
+    clearTimeout(exportTimerRef.current);
+    exportTimerRef.current = window.setTimeout(() => setExportMsg(null), 5000);
+  };
 
   const loadLogs = async () => {
     try {
@@ -28,11 +35,9 @@ export default function LogsPage() {
   const handleExport = async () => {
     try {
       const path = await invoke<string>("export_logs");
-      setExportMsg("Saved: " + path);
-      setTimeout(() => setExportMsg(null), 5000);
+      showExportMsg(true, "Saved: " + path);
     } catch (e) {
-      setExportMsg("Export failed: " + e);
-      setTimeout(() => setExportMsg(null), 5000);
+      showExportMsg(false, "Export failed: " + e);
     }
   };
 
@@ -49,7 +54,10 @@ export default function LogsPage() {
   useEffect(() => {
     loadLogs();
     const interval = setInterval(loadLogs, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(exportTimerRef.current);
+    };
   }, []);
 
   // Auto-scroll to bottom unless user scrolled up
@@ -117,16 +125,16 @@ export default function LogsPage() {
               marginBottom: 12,
               borderRadius: "var(--radius-sm)",
               fontSize: 12,
-              background: exportMsg.startsWith("Saved")
+              background: exportMsg.ok
                 ? "rgba(63,185,80,0.15)"
                 : "rgba(248,81,73,0.15)",
-              color: exportMsg.startsWith("Saved")
+              color: exportMsg.ok
                 ? "var(--accent-green)"
                 : "var(--accent-red)",
               wordBreak: "break-all",
             }}
           >
-            {exportMsg}
+            {exportMsg.text}
           </div>
         )}
         <div className="log-container" ref={containerRef} onScroll={handleScroll}>
@@ -136,7 +144,7 @@ export default function LogsPage() {
             </div>
           )}
           {filteredLogs.map((entry, i) => (
-            <div className="log-entry" key={i}>
+            <div className="log-entry" key={`${entry.timestamp}-${i}`}>
               <span className="log-time">{entry.timestamp}</span>
               <span className={`log-level ${levelClass(entry.level)}`}>
                 {entry.level}

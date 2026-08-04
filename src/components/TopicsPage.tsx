@@ -70,6 +70,8 @@ export default function TopicsPage() {
   const [originalName, setOriginalName] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
   const messageTimerRef = useRef<number | undefined>(undefined);
+  // 実行中（Refresh 中）のトピック名
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 
   const showMessage = (type: string, text: string) => {
     setMessage({ type, text });
@@ -162,11 +164,19 @@ export default function TopicsPage() {
   };
 
   const handleRefresh = async (name: string) => {
+    if (refreshing.has(name)) return;
+    setRefreshing((prev) => new Set(prev).add(name));
     try {
       await invoke("refresh_topic", { topicName: name });
       showMessage("success", "Refreshed: " + name);
     } catch (e) {
       showMessage("error", `Refresh failed: ${e}`);
+    } finally {
+      setRefreshing((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
     }
   };
 
@@ -255,8 +265,13 @@ export default function TopicsPage() {
                   <button className="btn btn-sm" onClick={() => openEdit(topic)}>
                     Edit
                   </button>
-                  <button className="btn btn-sm" onClick={() => handleRefresh(topic.name)}>
-                    {"\u{1F504}"}
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => handleRefresh(topic.name)}
+                    disabled={refreshing.has(topic.name)}
+                    title="Fetch and generate now"
+                  >
+                    {refreshing.has(topic.name) ? "..." : "\u{1F504}"}
                   </button>
                   <button className="btn btn-sm btn-danger" onClick={() => handleDelete(topic.name)}>
                     Delete

@@ -26,11 +26,13 @@
 ```
 1. D:\学校\app\my-quick-feed でソース編集 → git commit
 2. D:\quickfeed にソースを同期: robocopy D:\学校\app\my-quick-feed D:\quickfeed /MIR /XD target node_modules dist .git /XF run.bat /NFL /NDL /NJH /NJS
-3. D:\quickfeed でビルド・テスト（cwd パラメータで D:\quickfeed を指定）
-4. run.bat は D:\quickfeed のものを実行（D:\学校 の run.bat はラッパー）
+3. run.bat 本体（run-build.bat）を同期: copy D:\学校\app\my-quick-feed\run-build.bat D:\quickfeed\run.bat
+4. D:\quickfeed でビルド・テスト（cwd パラメータで D:\quickfeed を指定）
+5. run.bat は D:\quickfeed のものを実行（D:\学校 の run.bat はラッパー）
 ```
 
-**⚠ run.bat は同期から除外すること（/XF run.bat）**: D:\学校 の run.bat はラッパー（D:\quickfeed を呼ぶだけ）。/MIR 同期でラッパーが D:\quickfeed の本体 run.bat を上書きすると、run.bat が自分自身を call する無限ループになり「動かない」（2026-08-04 実害あり・修正済み）。
+**⚠ run.bat は同期から除外すること（/XF run.bat）**: D:\学校 の run.bat はラッパー（D:\quickfeed を呼ぶだけ）。/MIR 同期でラッパーが D:\quickfeed の本体 run.bat を上書きすると、run.bat が自分自身を call する無限ループになり「動かない」（2026-08-04 実害あり・修正済み）。**run.bat 本体は `run-build.bat` として git 管理**し、同期後に copy で D:\quickfeed\run.bat に反映する（copy コマンドは上記 3 番）。
+**⚠ run.bat はビルド前に旧アプリを taskkill する**（`taskkill /IM my-quick-feed.exe /F`）。アプリ起動中に再実行すると exe がロックされ cargo build が失敗するため（2026-08-04 実害あり）。
 
 ---
 
