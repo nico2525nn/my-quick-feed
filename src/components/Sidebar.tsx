@@ -29,10 +29,14 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Settings: サイドバー下部の独立ボタン */}
-      <button className="sidebar-settings" onClick={() => navigate("/settings")}>
-        <span className="nav-icon">{"\u2699\uFE0F"}</span>
-        Settings
+      {/* Settings: サイドバー左下端のアイコンのみボタン */}
+      <button
+        className="sidebar-settings"
+        onClick={() => navigate("/settings")}
+        title="Settings"
+        aria-label="Settings"
+      >
+        {"\u2699\uFE0F"}
       </button>
     </aside>
   );

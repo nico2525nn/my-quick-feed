@@ -96,8 +96,6 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 8px;
 }
 
 .sidebar-header .logo {
@@ -142,19 +140,21 @@ body {
   text-align: center;
 }
 
-/* Settings ボタン（サイドバー下部・独立） */
+/* Settings ボタン（サイドバー左下端・アイコンのみ） */
 .sidebar-settings {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
   margin: 8px;
-  padding: 8px 12px;
+  padding: 0;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
-  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -163,16 +163,6 @@ body {
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border-hover);
-}
-
-.sidebar-status {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 
 .status-dot {
