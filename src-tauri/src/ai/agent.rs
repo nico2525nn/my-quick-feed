@@ -235,10 +235,14 @@ JSON以外の出力は絶対に含めないでください。
                 );
             }
         }
-        let _ = std::fs::remove_file(&prompt_path);
         output
     })
     .await;
+
+    // プロンプトファイルはタイムアウト・中断時も削除する（timeout の外で行う）
+    if has_file {
+        let _ = std::fs::remove_file(&prompt_path);
+    }
 
     match result {
         Ok(Ok((articles, resume_used))) => {
