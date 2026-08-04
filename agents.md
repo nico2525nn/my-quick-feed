@@ -426,8 +426,30 @@ npx vite preview --port 5173 --host 127.0.0.1
 
 ---
 
-## 10. 注意事項（ユーザーとの約束）
+## 9.5 並行作業ワークフロー（2026-08-04 ユーザー指定・標準運用）
 
+**大きめの機能（構想 §11 の実装など）は、git worktree + サブエージェント並行で実装する**。手順:
+
+1. **worktree を 2 つ作成**（実装する機能ごと）:
+   ```
+   git worktree add D:\wt-<機能名> -b feature/<機能名> master
+   ```
+   ※ worktree は ASCII パス（D:\wt-xxx）で作る。ビルドする場合は dist/node_modules のジャンクション等が必要だが、原則エージェントはビルドしない。
+2. **task ツールでサブエージェントを並行起動**（1 機能 = 1 エージェント、それぞれ別 worktree）:
+   - 各エージェントへの指示: 自分の worktree で作業、**ビルド・テスト・lint は実行しない**（マージ前にメインが検証）、変更は最小限、日本語コメント、完了したら worktree 内で `git add -A && git commit` し**ブランチ名・変更ファイル・コミットハッシュ**を報告。
+   - 同じファイルを触っても別ブランチなので競合しない。
+3. **マージ前の検証**（メインが実行）: 各ブランチで `cargo check` + `npx tsc --noEmit`（worktree に dist が無いと tauri の generate_context! が失敗するので、`D:\quickfeed\dist` を worktree にコピー or ジャンクション。target は `--target-dir D:\quickfeed\src-tauri\target` で共有）。
+   - **コンパイルエラーはマージ前に修正**（エージェントの worktree で直してコミット or マージ後にメインが修正）。
+4. **マージ**: `git merge feature/<機能名> --no-edit`（master で実行）。コンフリクトがあれば解消。
+5. **統合検証**: マージ後の master を D:\quickfeed に同期 → cargo check + tsc + vite build + cargo build --release → 必要なら実機テスト（--run-once --no-post 等）。
+6. **コードレビュー・整理**: マージ結果を読み、重複・不要コード・スタイルの統一を行う。古い feature ブランチは削除、worktree は `git worktree remove --force` で掃除。
+7. **agents.md に実装結果を記録**してコミット。
+
+**注意**: isolated（worktree）オプションはこの環境では無効（task.isolation.mode = none）のため、**手動で git worktree を作ってパスを渡す**方式をとる。エージェントの調査で omp を実行する場合はクレジット消費に注意（最大 2 回まで等の制約を明示）。
+
+---
+
+## 10. 注意事項（ユーザーとの約束）
 - ユーザーは日本語話者。返答は日本語で。
 - 動作確認には `image-descriptor` サブエージェントを使う（ユーザー指定）。クレジット不足（402）で失敗したら、ユーザーに伝えて補充を依頼する。
 - ユーザーのDiscordトークン・APIキーが設定ファイルに入っている。絶対に外部に漏らさない。
