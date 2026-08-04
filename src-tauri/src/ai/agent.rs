@@ -186,7 +186,7 @@ JSON以外の出力は絶対に含めないでください。
         let output = if has_file {
             run_omp_file(command, &work_dir, &prompt_path, model, resume_id.as_deref(), &session_dir).await
         } else {
-            run_omp_direct(command, &prompt, model).await.map(|a| (a, false))
+            run_omp_direct(command, &prompt, model).await
         };
         let elapsed = exec_started.elapsed();
         match &output {
