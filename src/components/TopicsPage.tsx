@@ -15,6 +15,7 @@ interface TopicConfig {
   image_search_enabled: boolean | null;
   research_enabled: boolean | null;
   forum_channel_id: string | null;
+  reference_urls: string[];
 }
 
 interface AppConfig {
@@ -60,6 +61,7 @@ function emptyTopic(): TopicConfig {
     image_search_enabled: true,
     research_enabled: true,
     forum_channel_id: null,
+    reference_urls: [],
   };
 }
 
@@ -397,6 +399,24 @@ export default function TopicsPage() {
               <button className="btn btn-sm" onClick={addSource} style={{ marginTop: 4 }}>
                 + Add Source
               </button>
+            </div>
+
+            <div className="form-group">
+              <label>Reference URLs（1行に1つ）</label>
+              <textarea
+                className="form-textarea"
+                rows={3}
+                value={editing.reference_urls.join("\n")}
+                onChange={(e) =>
+                  updateEditing({
+                    reference_urls: e.target.value
+                      .split("\n")
+                      .map((u) => u.trim())
+                      .filter((u) => u.length > 0),
+                  })
+                }
+                placeholder="例: https://example.com/wiki/Apex"
+              />
             </div>
 
             <div className="form-group">

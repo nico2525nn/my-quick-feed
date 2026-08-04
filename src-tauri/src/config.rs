@@ -47,6 +47,9 @@ pub struct TopicConfig {
     /// トピック専用のフォーラムチャンネル ID（未指定なら discord.forum_channel_id を使う）
     #[serde(default)]
     pub forum_channel_id: Option<String>,
+    /// 参考文献 URL リスト（Wiki 等。プロンプトに埋め込む）
+    #[serde(default)]
+    pub reference_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

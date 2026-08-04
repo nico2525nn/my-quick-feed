@@ -42,6 +42,23 @@ pub async fn run_agent(
         recent_titles.iter().map(|t| format!("- {}", t)).collect::<Vec<_>>().join("\n")
     };
 
+    // 参考文献 URL リスト（空でなければ「## 参考文献」セクションとして埋め込む）
+    // 空の場合は元のプロンプトと同じ改行だけ残す
+    let reference_block = if topic.reference_urls.is_empty() {
+        "\n".to_string()
+    } else {
+        let urls = topic
+            .reference_urls
+            .iter()
+            .map(|u| format!("- {}", u))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n## 参考文献（背景知識・正確性のための参考 URL。必要に応じて Web で確認してください）\n{}\n",
+            urls
+        )
+    };
+
     // プロンプト本体に記事リストも含める（OMP -p は複数 @file に非対応のため）
     let prompt = format!(
         r#"あなたはニュース記事を生成するアシスタントです。
@@ -60,7 +77,7 @@ pub async fn run_agent(
 
 ## システム指示
 {system_prompt}
-
+{reference_block}
 ## 元記事
 {feed_summary}
 
@@ -83,6 +100,7 @@ JSON以外の出力は絶対に含めないでください。
         model = model,
         recent_block = recent_block,
         system_prompt = system_prompt,
+        reference_block = reference_block,
         feed_summary = feed_summary,
     );
 
