@@ -252,7 +252,24 @@ async fn export_logs(state: tauri::State<'_, AppState>) -> Result<String, String
 }
 /// ===== App Entry Point =====
 
-pub fn run(post_enabled: bool) {
+/// 起動オプション（main.rs でパースして渡す）
+#[derive(Debug, Clone, Default)]
+pub struct CliArgs {
+    /// false なら Discord 投稿・DB 保存をしない（--no-post）
+    pub post_enabled: bool,
+    /// ログをコンソールにも出力（--console）
+    pub console: bool,
+    /// スケジューラを起動せず、パイプラインを 1 回実行して終了（--run-once）
+    pub run_once: bool,
+    /// --run-once 時に実行するトピック名（省略時は全トピック）
+    pub topic_filter: Option<String>,
+    /// 設定ファイルパス（--config、省略時は %APPDATA% のデフォルト）
+    pub config_path: Option<std::path::PathBuf>,
+    /// ログレベルを debug に上げる（--verbose）
+    pub verbose: bool,
+}
+
+pub fn run(cli: CliArgs) {
     // tracing subscriber: stdout + ファイル + LogCaptureLayer
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -286,8 +303,13 @@ pub fn run(post_enabled: bool) {
         .with(file_layer)
         .with(capture_layer)
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "my_quick_feed=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                if cli.verbose {
+                    "my_quick_feed=debug".into()
+                } else {
+                    "my_quick_feed=info".into()
+                }
+            }),
         )
         .init();
 
@@ -315,7 +337,14 @@ pub fn run(post_enabled: bool) {
                 .app_data_dir()
                 .expect("Failed to get app data dir");
 
-            let config_path = app_data_dir.join("my-quick-feed.yaml");
+            // --config 指定があればそのパスを使う（無ければ %APPDATA% のデフォルト）
+            let config_path = cli
+                .config_path
+                .clone()
+                .unwrap_or_else(|| app_data_dir.join("my-quick-feed.yaml"));
+            if cli.config_path.is_some() {
+                info!("設定ファイル: {:?}（--config 指定）", config_path);
+            }
             let config_manager =
                 Arc::new(ConfigManager::load(config_path).expect("Failed to load config"));
 
@@ -348,7 +377,7 @@ pub fn run(post_enabled: bool) {
                 config_manager.clone(),
                 db.clone(),
                 discord,
-                post_enabled,
+                cli.post_enabled,
             ));
 
             let scheduler = Arc::new(Scheduler::new(config_manager.clone(), pipeline.clone()));
@@ -363,10 +392,44 @@ pub fn run(post_enabled: bool) {
 
             app.manage(state);
 
-            let scheduler_clone = scheduler.clone();
-            tauri::async_runtime::spawn(async move {
-                scheduler_clone.start_all().await;
-            });
+            if cli.run_once {
+                // --run-once: スケジューラを起動せず、パイプラインを 1 回実行して終了
+                let pipeline = pipeline.clone();
+                let config_manager = config_manager.clone();
+                let topic_filter = cli.topic_filter.clone();
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let config = config_manager.get();
+                    let topics: Vec<TopicConfig> = match &topic_filter {
+                        Some(name) => config
+                            .topics
+                            .into_iter()
+                            .filter(|t| &t.name == name)
+                            .collect(),
+                        None => config.topics,
+                    };
+                    if topics.is_empty() {
+                        if let Some(name) = &topic_filter {
+                            error!("--run-once: トピック '{}' が見つかりません", name);
+                        } else {
+                            info!("--run-once: 実行対象トピックなし");
+                        }
+                    }
+                    for topic in &topics {
+                        info!(topic = %topic.name, "--run-once: 実行開始");
+                        if let Err(e) = pipeline.run(topic).await {
+                            error!(topic = %topic.name, "--run-once: 実行失敗: {}", e);
+                        }
+                    }
+                    info!("--run-once: 全実行完了、終了します");
+                    app_handle.exit(0);
+                });
+            } else {
+                let scheduler_clone = scheduler.clone();
+                tauri::async_runtime::spawn(async move {
+                    scheduler_clone.start_all().await;
+                });
+            }
 
             // System tray
             let tray = TrayIconBuilder::new()
