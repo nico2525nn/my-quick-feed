@@ -240,14 +240,19 @@ fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
                 .to_string();
             let text = message_text(message.get("content"));
             // thinking / reasoning パーツの抽出
+            // （omp の thinking パーツは text ではなく thinking フィールドに本文が入る。
+            //   Claude 形式（text フィールド）も併せて読む）
             if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
                 for part in content {
                     let kind = part.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     if kind == "thinking" || kind == "reasoning" || kind == "thinking_delta" {
-                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                            if !t.trim().is_empty() {
-                                thinking_parts.push(t.to_string());
-                            }
+                        let t = part
+                            .get("text")
+                            .or_else(|| part.get("thinking"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        if !t.trim().is_empty() {
+                            thinking_parts.push(t.to_string());
                         }
                     }
                 }
