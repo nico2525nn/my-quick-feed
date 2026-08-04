@@ -15,6 +15,7 @@ interface AppConfig {
     provider: string | null;
     base_url: string | null;
     thinking_level: string | null;
+    session_reuse: boolean;
   };
   topics: unknown[];
 }
@@ -291,6 +292,19 @@ export default function SettingsPage() {
                     記事の正確性が上がります。
                   </div>
                 </div>
+                <label className="form-checkbox" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={config.ai.session_reuse}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        ai: { ...config.ai, session_reuse: e.target.checked },
+                      })
+                    }
+                  />
+                  セッション再利用（resume）— 実験的。履歴が溜まると古い指示に引きずられるため通常は off
+                </label>
               </>
             )}
           </div>

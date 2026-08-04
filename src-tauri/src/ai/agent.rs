@@ -81,6 +81,7 @@ pub async fn run_agent(
     model: &str,
     timeout_sec: u64,
     thinking_level: Option<&str>,
+    session_reuse: bool,
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
     recent_titles: &[String],
@@ -253,7 +254,12 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
     let session_dir = work_dir.join("omp-sessions");
     let _ = std::fs::create_dir_all(&session_dir);
     let session_file = topic_session_file(&work_dir, &safe_name);
-    let resume_id = read_topic_session_id(&session_file);
+    // セッション再利用がオフなら resume しない（履歴汚染防止・デフォルト）
+    let resume_id = if session_reuse {
+        read_topic_session_id(&session_file)
+    } else {
+        None
+    };
     // 非resume実行時（初回・フォールバック）に新規セッションID を検出するためのスナップショット
     let session_files_before = list_session_files(&session_dir);
 
@@ -433,8 +439,24 @@ fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult
         );
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    info!("omp stdout: {} bytes", stdout.len());
+    let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
+    info!("omp stdout: {} bytes", stdout_raw.len());
+
+    // Markdown コードフェンス（```json ... ```）や前後の思考テキストがあっても
+    // JSON 部分を取り出してパースできるようにする
+    let stdout = stdout_raw.trim();
+    let stdout = if stdout.starts_with("```") {
+        stdout
+            .trim_start_matches("```")
+            .trim_start_matches("json")
+            .trim_start_matches("```")
+            .trim()
+            .trim_end_matches("```")
+            .trim()
+            .to_string()
+    } else {
+        stdout.to_string()
+    };
 
     // 1) 直接JSON配列としてパース
     if let Ok(list) = serde_json::from_str::<Vec<ArticleResult>>(&stdout) {

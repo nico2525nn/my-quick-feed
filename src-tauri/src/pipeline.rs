@@ -145,11 +145,11 @@ impl Pipeline {
             _ => {
                 let cmd = config.ai.agent_command.as_deref().unwrap_or("omp");
                 let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
-                let timeout = config.ai.agent_timeout_sec.unwrap_or(180).max(30);
+                let timeout = config.ai.agent_timeout_sec.unwrap_or(300).max(30);
                 // 設定に無い場合は high（mimo-v2.5 は low/medium/high のみ対応・深く考えさせる）
                 let thinking = config.ai.thinking_level.as_deref().unwrap_or("high");
-                info!(topic = %tn, "Agent呼び出し [cmd={}, model={}, timeout={}s, thinking={}]", cmd, model, timeout, thinking);
-                run_agent(cmd, model, timeout, Some(thinking), topic, &all_items, &recent_titles).await?
+                info!(topic = %tn, "Agent呼び出し [cmd={}, model={}, timeout={}s, thinking={}, session_reuse={}]", cmd, model, timeout, thinking, config.ai.session_reuse);
+                run_agent(cmd, model, timeout, Some(thinking), config.ai.session_reuse, topic, &all_items, &recent_titles).await?
             }
         };
         info!(

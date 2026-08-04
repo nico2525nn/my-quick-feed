@@ -23,6 +23,10 @@ pub struct AiConfig {
     /// OMP の --thinking レベル（mimo-v2.5 は low/medium/high のみ対応。デフォルト high）
     #[serde(default)]
     pub thinking_level: Option<String>,
+    /// トピック単位の OMP セッション再利用（resume）。
+    /// 履歴が溜まると古いプロンプトに引きずられるため、デフォルトは off（2026-08-04 実測）
+    #[serde(default)]
+    pub session_reuse: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,13 +124,15 @@ impl Default for AppConfig {
             ai: AiConfig {
                 mode: "agent".to_string(),
                 agent_command: Some("omp".to_string()),
-                agent_timeout_sec: Some(120),
+                agent_timeout_sec: Some(300),
                 api_key: None,
                 model: Some("mimo-v2.5".to_string()),
                 provider: Some("opencode-go".to_string()),
                 base_url: None,
                 // mimo-v2.5 は low/medium/high のみ対応。深く考えさせるため high をデフォルトに
                 thinking_level: Some("high".to_string()),
+                // resume は履歴汚染のためデフォルト off（設定で on にできる）
+                session_reuse: false,
             },
             topics: vec![],
         }
