@@ -97,6 +97,10 @@ pub async fn run_agent(
     let language = topic.language.as_deref().unwrap_or("ja");
     let system_prompt = resolve_system_prompt(&topic.name, language, topic.system_prompt.as_deref());
 
+    // OMP 作業ディレクトリを分離（セッション履歴の汚染防止）
+    let work_dir = omp_work_dir();
+    let _ = std::fs::create_dir_all(&work_dir);
+
     // 直近投稿タイトル一覧（重複防止）
     let recent_block = if recent_titles.is_empty() {
         "（なし）".to_string()
@@ -213,7 +217,14 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
     "sources": ["出典1", "出典2"]
   }}
 ]
-重要でない記事はスキップして構いません。"#,
+重要でない記事はスキップして構いません。
+
+## 出力方法（重要）
+生成した記事の JSON 配列を、**ツール（write）を使って次のファイルに書き込んでください**:
+{output_path}
+- ファイルには JSON 配列のみを書き込むこと（説明文や Markdown コードフェンスは不要）
+- **stdout には JSON や余計なテキストを出力しないこと**
+- ツールでファイルを書けない場合のみ、やむを得ず stdout に JSON を出力してください。"#,
         topic_name = topic.name,
         language = language,
         model = model,
@@ -221,16 +232,13 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
         system_prompt = system_prompt,
         reference_block = reference_block,
         feed_summary = feed_summary,
+        output_path = work_dir.join("output.json").to_string_lossy(),
     );
 
     info!(
         topic = %topic.name, "Running agent [cmd={}, model={}, timeout={}s, prompt={}chars, articles={}chars]",
         command, model, timeout_sec, prompt.len(), feed_summary.len()
     );
-
-    // OMP 作業ディレクトリを分離（セッション履歴の汚染防止）
-    let work_dir = omp_work_dir();
-    let _ = std::fs::create_dir_all(&work_dir);
 
     // プロンプトファイル（記事リスト込み）を作業ディレクトリに書き込み
     // 複数トピックの並行実行で上書きし合わないよう、トピック名+タイムスタンプでユニークにする
@@ -300,6 +308,14 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
 
     match result {
         Ok(Ok((articles, resume_used))) => {
+            // ファイル書き出し方式（実験）: エージェントが write ツールで output.json に
+            // 書き込んだ場合は、stdout のパース結果より優先して使う。
+            // （stdout に余計なテキストが混ざる問題・構文エラーの回避）
+            if let Some(list) = read_output_json(&work_dir) {
+                info!(topic = %topic.name, "output.json から記事を読み込み: {} 件", list.len());
+                return Ok(list);
+            }
+
             if resume_used {
                 info!(topic = %topic.name, "OMPセッションを再利用（resume）");
             } else if let Some(id) = discover_session_id(&session_dir, &session_files_before) {
@@ -310,11 +326,29 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
             info!(topic = %topic.name, "Agent returned {} articles", articles.len());
             Ok(articles)
         }
-        Ok(Err(e)) => Err(e),
+        Ok(Err(e)) => {
+            // stdout のパースに失敗した場合も、エージェントが output.json に
+            // 書き込んでいればそちらを使う（ファイル書き出し方式の本命パス）
+            if let Some(list) = read_output_json(&work_dir) {
+                info!(topic = %topic.name, "stdout パース失敗 → output.json から記事を読み込み: {} 件", list.len());
+                return Ok(list);
+            }
+            Err(e)
+        }
         Err(_) => Err(AppError::Timeout(format!(
             "Agent timed out after {}s", timeout_sec
         ))),
     }
+}
+
+/// エージェントが write ツールで書き込んだ output.json を読んでパースする。
+/// 読めたら削除して Some(list) を返す。なければ None。
+fn read_output_json(work_dir: &Path) -> Option<Vec<ArticleResult>> {
+    let output_json = work_dir.join("output.json");
+    let content = std::fs::read_to_string(&output_json).ok()?;
+    let list = parse_articles_str(&content).filter(|l| !l.is_empty());
+    let _ = std::fs::remove_file(&output_json);
+    list
 }
 
 /// OMP を1回実行する（resume_id があれば --resume を付ける）
@@ -383,6 +417,12 @@ async fn run_omp_file(
     match first {
         Ok(articles) => Ok((articles, resume_id.is_some())),
         Err(e) if resume_id.is_some() => {
+            // ファイル書き出し方式: エージェントが output.json を書き終えていれば、
+            // その実行は実質成功（stdout に JSON を出さない仕様のため）。
+            // 二重実行を避けるため、output.json がある場合はフォールバックしない。
+            if work_dir.join("output.json").exists() {
+                return Ok((Vec::new(), true));
+            }
             warn!("resume 失敗のため通常実行にフォールバック: {}", e);
             let articles = run_omp_once(command, work_dir, prompt_path, model, thinking_level, session_dir, None).await?;
             Ok((articles, false))
@@ -442,8 +482,22 @@ fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult
     let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
     info!("omp stdout: {} bytes", stdout_raw.len());
 
-    // Markdown コードフェンス（```json ... ```）や前後の思考テキストがあっても
-    // JSON 部分を取り出してパースできるようにする
+    match parse_articles_str(&stdout_raw) {
+        Some(list) if !list.is_empty() => Ok(list),
+        _ => {
+            let preview = stdout_raw.chars().take(300).collect::<String>();
+            Err(AppError::Agent(format!(
+                "Could not extract articles. Preview: {}",
+                preview
+            )))
+        }
+    }
+}
+
+/// 記事 JSON を文字列からパースする（stdout / output.json の両方で使う）。
+/// Markdown コードフェンス（```json ... ```）や前後の余計なテキストがあっても
+/// JSON 部分を取り出してパースできるようにする。
+fn parse_articles_str(stdout_raw: &str) -> Option<Vec<ArticleResult>> {
     let stdout = stdout_raw.trim();
     let stdout = if stdout.starts_with("```") {
         stdout
@@ -461,14 +515,14 @@ fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult
     // 1) 直接JSON配列としてパース
     if let Ok(list) = serde_json::from_str::<Vec<ArticleResult>>(&stdout) {
         if !list.is_empty() {
-            return Ok(list);
+            return Some(list);
         }
     }
 
     // 2) ArticleListResult でラップされた形式
     if let Ok(wrapped) = serde_json::from_str::<ArticleListResult>(&stdout) {
         if !wrapped.articles.is_empty() {
-            return Ok(wrapped.articles);
+            return Some(wrapped.articles);
         }
     }
 
@@ -478,7 +532,7 @@ fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult
             let json = &stdout[s..=e];
             if let Ok(list) = serde_json::from_str::<Vec<ArticleResult>>(json) {
                 if !list.is_empty() {
-                    return Ok(list);
+                    return Some(list);
                 }
             }
         }
@@ -488,18 +542,13 @@ fn parse_omp_output(output: std::process::Output) -> AppResult<Vec<ArticleResult
     if let (Some(s), Some(e)) = (stdout.find('{'), stdout.rfind('}')) {
         if s < e {
             if let Ok(article) = serde_json::from_str::<ArticleResult>(&stdout[s..=e]) {
-                return Ok(vec![article]);
+                return Some(vec![article]);
             }
         }
     }
 
-    // 5) OMP session JSONから抽出
-    if let Some(articles) = extract_from_omp_session(&stdout) {
-        return Ok(articles);
-    }
-
-    let preview = stdout.chars().take(300).collect::<String>();
-    Err(AppError::Agent(format!("Could not extract articles. Preview: {}", preview)))
+    // 5) OMP session protocol JSONL から抽出
+    extract_from_omp_session(&stdout)
 }
 
 /// OMP session protocol JSONL からアシスタント応答を抽出
