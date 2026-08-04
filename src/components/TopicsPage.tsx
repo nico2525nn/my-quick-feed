@@ -32,6 +32,26 @@ interface AppConfig {
   topics: TopicConfig[];
 }
 
+// トピック詳細（get_topic_detail）の戻り値
+interface PostSummary {
+  id: number;
+  topic_id: string;
+  title: string;
+  created_at: string;
+}
+
+interface TopicSession {
+  created_at: string;
+  prompt_preview: string;
+  response_preview: string;
+}
+
+interface TopicDetail {
+  config: TopicConfig;
+  posts: PostSummary[];
+  sessions: TopicSession[];
+}
+
 function generateTemplatePrompt(name: string, language: string): string {
   if (!name) return "";
   switch (language) {
@@ -78,6 +98,8 @@ export default function TopicsPage() {
   const messageTimerRef = useRef<number | undefined>(undefined);
   // 実行中（Refresh 中）のトピック名
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
+  // トピック詳細モーダル（設定・投稿ニュース・セッション履歴）
+  const [detail, setDetail] = useState<TopicDetail | null>(null);
 
   const showMessage = (type: string, text: string) => {
     setMessage({ type, text });
@@ -186,6 +208,18 @@ export default function TopicsPage() {
     }
   };
 
+  const openDetail = async (topic: TopicConfig) => {
+    setMessage(null);
+    try {
+      const detail = await invoke<TopicDetail>("get_topic_detail", {
+        topicName: topic.name,
+      });
+      setDetail(detail);
+    } catch (e) {
+      showMessage("error", `詳細の取得に失敗しました: ${e}`);
+    }
+  };
+
   const openNew = () => {
     setEditing(emptyTopic());
     setIsNew(true);
@@ -268,6 +302,13 @@ export default function TopicsPage() {
               <div className="topic-card-header">
                 <span className="topic-card-title">{topic.name}</span>
                 <div className="topic-card-actions">
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => openDetail(topic)}
+                    title="設定・投稿・セッション履歴を表示"
+                  >
+                    詳細
+                  </button>
                   <button className="btn btn-sm" onClick={() => openEdit(topic)}>
                     Edit
                   </button>
@@ -479,6 +520,129 @@ export default function TopicsPage() {
               </button>
               <button className="btn btn-primary" onClick={handleSave}>
                 {isNew ? "Create" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* トピック詳細モーダル */}
+      {detail && (
+        <div className="modal-overlay" onClick={() => setDetail(null)}>
+          <div
+            className="modal-content"
+            style={{ maxWidth: 720 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ marginBottom: 20, fontSize: 16, fontWeight: 600 }}>
+              {detail.config.name}
+            </h2>
+
+            <div className="form-group">
+              <label>設定</label>
+              <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+                <div>言語: {detail.config.language ?? "ja"}</div>
+                <div>間隔: {detail.config.interval_min} 分ごと</div>
+                <div>ソース数: {detail.config.sources.length}</div>
+                <div>
+                  フォーラムチャンネル:{" "}
+                  {detail.config.forum_channel_id || "（グローバル設定を使用）"}
+                </div>
+                {detail.config.reference_urls.length > 0 && (
+                  <div>
+                    参考文献:
+                    {detail.config.reference_urls.map((u, i) => (
+                      <div key={i} style={{ wordBreak: "break-all" }}>
+                        {"\u2022"} {u}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>投稿ニュース（直近10件）</label>
+              {detail.posts.length === 0 ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  まだ投稿がありません
+                </div>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.8 }}>
+                  {detail.posts.map((p) => (
+                    <li key={p.id}>
+                      <span style={{ color: "var(--text-muted)", marginRight: 8 }}>
+                        {p.created_at}
+                      </span>
+                      {p.title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="form-group">
+              <label>セッション履歴（直近10件）</label>
+              {detail.sessions.length === 0 ? (
+                <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  セッション履歴がありません
+                </div>
+              ) : (
+                detail.sessions.map((s, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: 10,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
+                      {s.created_at}
+                    </div>
+                    <div style={{ fontSize: 12, marginBottom: 4 }}>
+                      <span className="tag tag-blue">プロンプト</span>
+                    </div>
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontSize: 11,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                        color: "var(--text-secondary)",
+                        background: "var(--bg-primary)",
+                        borderRadius: "var(--radius-sm)",
+                        padding: 8,
+                      }}
+                    >
+                      {s.prompt_preview}
+                    </pre>
+                    <div style={{ fontSize: 12, marginTop: 8, marginBottom: 4 }}>
+                      <span className="tag tag-green">回答</span>
+                    </div>
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontSize: 11,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                        color: "var(--text-secondary)",
+                        background: "var(--bg-primary)",
+                        borderRadius: "var(--radius-sm)",
+                        padding: 8,
+                      }}
+                    >
+                      {s.response_preview}
+                    </pre>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setDetail(null)}>
+                Close
               </button>
             </div>
           </div>

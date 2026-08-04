@@ -160,6 +160,176 @@ async fn get_posts(
     }
 }
 
+/// トピック詳細画面用: OMP セッション 1 件分のプレビュー
+#[derive(serde::Serialize)]
+struct TopicDetailSession {
+    created_at: String,
+    prompt_preview: String,
+    response_preview: String,
+}
+
+/// トピック詳細画面用のデータ（設定・投稿ニュース・セッション履歴）
+#[derive(serde::Serialize)]
+struct TopicDetail {
+    config: TopicConfig,
+    posts: Vec<db::PostSummary>,
+    sessions: Vec<TopicDetailSession>,
+}
+
+#[tauri::command]
+async fn get_topic_detail(
+    state: tauri::State<'_, AppState>,
+    topic_name: String,
+) -> Result<TopicDetail, String> {
+    let config = state.config_manager.get();
+    let topic = config
+        .topics
+        .iter()
+        .find(|t| t.name == topic_name)
+        .cloned()
+        .ok_or_else(|| format!("トピック '{}' が見つかりません", topic_name))?;
+    // 投稿・セッションの読み込みは失敗してもアプリを止めない（空配列で返す）
+    let posts = state.db.get_posts(&topic_name, 10).unwrap_or_default();
+    let sessions = read_topic_sessions(&topic_name);
+    Ok(TopicDetail { config: topic, posts, sessions })
+}
+
+/// %TEMP%\my-quick-feed\omp\omp-sessions\*.jsonl から該当トピックのセッション履歴を読み込む。
+/// 1ファイル = 1セッション。最初の user メッセージをプロンプト、最後の assistant メッセージを回答とする。
+/// プロンプトに「## トピック\n<topic_name>」が無いファイル（別トピック・プローブ等）は無視する。
+fn read_topic_sessions(topic_name: &str) -> Vec<TopicDetailSession> {
+    let dir = std::env::temp_dir()
+        .join("my-quick-feed")
+        .join("omp")
+        .join("omp-sessions");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let mut found: Vec<(String, TopicDetailSession)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let mut first_user_ts: Option<String> = None;
+        let mut first_user_prompt: Option<String> = None;
+        let mut last_assistant: Option<String> = None;
+        for line in content.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            if value.get("type").and_then(|t| t.as_str()) != Some("message") {
+                continue;
+            }
+            let Some(message) = value.get("message") else { continue };
+            let Some(role) = message.get("role").and_then(|r| r.as_str()) else {
+                continue;
+            };
+            let ts = value
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            let text = message_text(message.get("content"));
+            match role {
+                "user" => {
+                    if first_user_prompt.is_none() {
+                        first_user_ts = Some(ts);
+                        first_user_prompt = Some(text);
+                    }
+                }
+                "assistant" => {
+                    // ツール呼び出し等の途中メッセージを避け、テキストを持つ最後の回答を採用する
+                    if !text.trim().is_empty() {
+                        last_assistant = Some(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(prompt) = first_user_prompt else { continue };
+        if !prompt_belongs_to_topic(&prompt, topic_name) {
+            continue;
+        }
+        let created_at = first_user_ts
+            .as_deref()
+            .map(local_time_string)
+            .unwrap_or_default();
+        found.push((
+            first_user_ts.unwrap_or_default(),
+            TopicDetailSession {
+                created_at,
+                prompt_preview: truncate_preview(&prompt),
+                response_preview: truncate_preview(&last_assistant.unwrap_or_default()),
+            },
+        ));
+    }
+    // 日付順（新しい順）に最大10件
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.truncate(10);
+    found.into_iter().map(|(_, s)| s).collect()
+}
+
+/// message.content（文字列 or パーツ配列）からテキストを抽出する。
+/// thinking / toolCall パーツは text フィールドを持たないため自動的に除外される。
+fn message_text(content: Option<&serde_json::Value>) -> String {
+    match content {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// プロンプトが「## トピック\n<topic_name>」で始まる行を含むか判定する（名前の前方一致誤爆防止）
+fn prompt_belongs_to_topic(prompt: &str, topic_name: &str) -> bool {
+    let needle = format!("## トピック\n{}", topic_name);
+    let Some(idx) = prompt.find(&needle) else {
+        return false;
+    };
+    match prompt[idx + needle.len()..].chars().next() {
+        // トピック名の直後は改行（または文末）であること
+        Some(c) => c == '\n' || c == '\r',
+        None => true,
+    }
+}
+
+/// omp のタイムスタンプ（ISO8601 UTC）をローカル時刻の表示用文字列に変換する
+fn local_time_string(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|_| ts.to_string())
+}
+
+/// プレビュー用: omp が付ける <file name="..."> ラッパーを除いて先頭 200 文字程度に切り詰める
+fn truncate_preview(text: &str) -> String {
+    const MAX: usize = 200;
+    let trimmed = text.trim_start();
+    let body = if let Some(rest) = trimmed.strip_prefix("<file ") {
+        if let Some((_, body)) = rest.split_once('\n') {
+            body.trim_start()
+        } else {
+            trimmed
+        }
+    } else {
+        trimmed
+    };
+    let mut chars = body.chars();
+    let head: String = chars.by_ref().take(MAX).collect();
+    if chars.next().is_some() {
+        format!("{}…", head)
+    } else {
+        head
+    }
+}
+
 #[tauri::command]
 async fn refresh_topic(
     state: tauri::State<'_, AppState>,
@@ -467,6 +637,7 @@ pub fn run(cli: CliArgs) {
             get_topics,
             get_topic_stats,
             get_posts,
+            get_topic_detail,
             refresh_topic,
             get_logs,
             export_logs,
