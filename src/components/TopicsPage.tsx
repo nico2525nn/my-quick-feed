@@ -16,6 +16,7 @@ interface TopicConfig {
   research_enabled: boolean | null;
   forum_channel_id: string | null;
   reference_urls: string[];
+  reference_mode: string | null;
 }
 
 interface AppConfig {
@@ -62,6 +63,7 @@ function emptyTopic(): TopicConfig {
     research_enabled: true,
     forum_channel_id: null,
     reference_urls: [],
+    reference_mode: null,
   };
 }
 
@@ -415,8 +417,23 @@ export default function TopicsPage() {
                       .filter((u) => u.length > 0),
                   })
                 }
-                placeholder="例: https://example.com/wiki/Apex"
+                placeholder="例: https://apexlegends.swiki.jp/"
               />
+              <label style={{ marginTop: 8 }}>Reference の使い方</label>
+              <select
+                className="form-select"
+                value={editing.reference_mode ?? "on-demand"}
+                onChange={(e) =>
+                  updateEditing({ reference_mode: e.target.value })
+                }
+              >
+                <option value="on-demand">必要に応じて読む（URL のみ・軽量）</option>
+                <option value="preload">事前に全部読んで知識を得てから書く（幻覚対策）</option>
+              </select>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                preload は「このサイトのページを可能な限り全て読んでから記事を書く」よう指示します。
+                読む量が多いと生成が遅くなる・コンテキストが大きくなる点に注意。
+              </div>
             </div>
 
             <div className="form-group">

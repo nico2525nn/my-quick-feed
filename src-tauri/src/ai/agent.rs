@@ -104,6 +104,8 @@ pub async fn run_agent(
 
     // 参考文献 URL リスト（空でなければ「## 参考文献」セクションとして埋め込む）
     // 空の場合は元のプロンプトと同じ改行だけ残す
+    // reference_mode: "preload" = サイトのページを全部読んで知識を得てから書く（幻覚対策・事前学習）
+    //                 "on-demand"（デフォルト）= URL のみ、エージェントが必要に応じて Web で確認
     let reference_block = if topic.reference_urls.is_empty() {
         "\n".to_string()
     } else {
@@ -113,10 +115,18 @@ pub async fn run_agent(
             .map(|u| format!("- {}", u))
             .collect::<Vec<_>>()
             .join("\n");
-        format!(
-            "\n## 参考文献（背景知識・正確性のための参考 URL。必要に応じて Web で確認してください）\n{}\n",
-            urls
-        )
+        let mode = topic.reference_mode.as_deref().unwrap_or("on-demand");
+        if mode == "preload" {
+            format!(
+                "\n## 参考文献（事前学習・必須）\n以下のサイトのページを可能な限り全て読み、トピック「{}」の正確な背景知識・最新情報を得てから記事を書いてください。記事の内容は、読んだ知識と矛盾させないこと。読んだ情報が記事の元記事と食い違う場合は、参考文献の知識を優先して正確に書くこと。\n{}\n",
+                topic.name, urls
+            )
+        } else {
+            format!(
+                "\n## 参考文献（背景知識・正確性のための参考 URL。必要に応じて Web で確認してください）\n{}\n",
+                urls
+            )
+        }
     };
 
     // プロンプト本体に記事リストも含める（OMP -p は複数 @file に非対応のため）

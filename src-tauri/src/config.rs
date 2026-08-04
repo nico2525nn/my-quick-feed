@@ -50,6 +50,10 @@ pub struct TopicConfig {
     /// 参考文献 URL リスト（Wiki 等。プロンプトに埋め込む）
     #[serde(default)]
     pub reference_urls: Vec<String>,
+    /// 参考文献の扱い: "preload" = 事前に内容を読み込んでプロンプトに埋め込む（幻覚対策・知識保持）、
+    /// "on-demand"（デフォルト）= URL のみ埋め込み、エージェントが必要に応じて Web で読む
+    #[serde(default)]
+    pub reference_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
