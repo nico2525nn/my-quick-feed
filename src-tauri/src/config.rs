@@ -20,6 +20,9 @@ pub struct AiConfig {
     pub model: Option<String>,
     pub provider: Option<String>,
     pub base_url: Option<String>,
+    /// OMP の --thinking レベル（mimo-v2.5 は low/medium/high のみ対応。デフォルト high）
+    #[serde(default)]
+    pub thinking_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +125,8 @@ impl Default for AppConfig {
                 model: Some("mimo-v2.5".to_string()),
                 provider: Some("opencode-go".to_string()),
                 base_url: None,
+                // mimo-v2.5 は low/medium/high のみ対応。深く考えさせるため high をデフォルトに
+                thinking_level: Some("high".to_string()),
             },
             topics: vec![],
         }

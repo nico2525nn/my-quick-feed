@@ -80,6 +80,7 @@ pub async fn run_agent(
     command: &str,
     model: &str,
     timeout_sec: u64,
+    thinking_level: Option<&str>,
     topic: &TopicConfig,
     feed_items: &[crate::fetcher::FeedItem],
     recent_titles: &[String],
@@ -118,7 +119,7 @@ pub async fn run_agent(
         let mode = topic.reference_mode.as_deref().unwrap_or("on-demand");
         if mode == "preload" {
             format!(
-                "\n## 参考文献（事前学習・必須）\n以下のサイトのページを可能な限り全て読み、トピック「{}」の正確な背景知識・最新情報を得てから記事を書いてください。記事の内容は、読んだ知識と矛盾させないこと。読んだ情報が記事の元記事と食い違う場合は、参考文献の知識を優先して正確に書くこと。\n{}\n",
+                "\n## 参考文献（事前学習・必須）\n以下のサイトのページを可能な限り全て読み、トピック「{}」の背景知識・最新情報を把握してから記事を書いてください。参考文献は主に**用語・固有名詞・仕組みを誤解しないため**に使うこと。記事の中心はあくまで元記事（スレッド）で実際に語られている意見・反応であり、参考文献の内容を記事の主役にしないこと。\n{}\n",
                 topic.name, urls
             )
         } else {
@@ -153,6 +154,16 @@ pub async fn run_agent(
 
 ## 出力形式
 注目すべきニュースそれぞれに対して記事を生成し、JSON配列で出力してください。
+この記事は「**ニュースの要点**」と「**SNS（Reddit 等）での実際の反応**」をまとめたダイジェストです。X や Reddit を逐一チェックする代わりに、これだけ見れば最新の動きとコミュニティの空気がわかる、というものを作ってください。
+各記事には次の両方を含めてください:
+- **ニュースの要点**: 何が起きたか（パッチ内容・発表・イベント等）を簡潔に
+- **コミュニティの反応**: 元記事（スレッド）で実際に語られている意見・不満・評価・面白いコメントを具体的に
+
+ルール:
+- 注目すべきニュースについては、元記事のリンク先（スレッド）を Web で開いて、**実際のコメント・反応を確認してから**記事に含めること
+- スレッドで実際に言われている意見があれば、それを記事に含めること（「○○という意見が多数」「こんな声も」のように）
+- AI が独自に考えた意見・推測・元記事に無い情報は**書かないこと**（でっち上げ禁止。あくまで実際にあった反応だけを伝える）
+- 用語や固有名詞（武器名・キャラ名等）を誤解しないよう注意すること
 既に投稿済みのトピックと内容が完全に重複する場合はスキップしてください。
 JSON以外の出力は絶対に含めないでください。
 [
@@ -212,9 +223,9 @@ JSON以外の出力は絶対に含めないでください。
     let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
         let exec_started = std::time::Instant::now();
         let output = if has_file {
-            run_omp_file(command, &work_dir, &prompt_path, model, resume_id.as_deref(), &session_dir).await
+            run_omp_file(command, &work_dir, &prompt_path, model, thinking_level, resume_id.as_deref(), &session_dir).await
         } else {
-            run_omp_direct(command, &prompt, model).await
+            run_omp_direct(command, &prompt, model, thinking_level).await
         };
         let elapsed = exec_started.elapsed();
         match &output {
@@ -269,6 +280,7 @@ async fn run_omp_once(
     work_dir: &Path,
     prompt_path: &Path,
     model: &str,
+    thinking_level: Option<&str>,
     session_dir: &Path,
     resume_id: Option<&str>,
 ) -> AppResult<Vec<ArticleResult>> {
@@ -277,6 +289,10 @@ async fn run_omp_once(
     // モデルを明示指定（プロンプト内の「## 使用モデル」だけでは確実でない）
     if !model.is_empty() && model != "default" {
         cmd.args(["--model", model]);
+    }
+    // 深く考えるレベルを指定（mimo-v2.5 は low/medium/high のみ対応）
+    if let Some(level) = thinking_level {
+        cmd.args(["--thinking", level]);
     }
     // マルチモーダル/対話型モデル（mimo等）はタスク実行を明示しないと
     // 「何をしたいですか？」と確認応答をするため、システムプロンプトで強制する
@@ -313,29 +329,34 @@ async fn run_omp_file(
     work_dir: &PathBuf,
     prompt_path: &PathBuf,
     model: &str,
+    thinking_level: Option<&str>,
     resume_id: Option<&str>,
     session_dir: &Path,
 ) -> AppResult<(Vec<ArticleResult>, bool)> {
     // resume 実行 → 失敗時は通常実行にフォールバックしてパイプラインを止めない
     // （戻り値の bool は「resume が使われたか」。resume は同一セッションに追記されるため
     //   ID の再保存は不要。false のときは新規セッションID を検出して保存する）
-    let first = run_omp_once(command, work_dir, prompt_path, model, session_dir, resume_id).await;
+    let first = run_omp_once(command, work_dir, prompt_path, model, thinking_level, session_dir, resume_id).await;
     match first {
         Ok(articles) => Ok((articles, resume_id.is_some())),
         Err(e) if resume_id.is_some() => {
             warn!("resume 失敗のため通常実行にフォールバック: {}", e);
-            let articles = run_omp_once(command, work_dir, prompt_path, model, session_dir, None).await?;
+            let articles = run_omp_once(command, work_dir, prompt_path, model, thinking_level, session_dir, None).await?;
             Ok((articles, false))
         }
         Err(e) => Err(e),
     }
 }
 
-async fn run_omp_direct(command: &str, prompt: &str, model: &str) -> AppResult<(Vec<ArticleResult>, bool)> {
+async fn run_omp_direct(command: &str, prompt: &str, model: &str, thinking_level: Option<&str>) -> AppResult<(Vec<ArticleResult>, bool)> {
     let mut cmd = Command::new(command);
     cmd.args(["-p"]);
     if !model.is_empty() && model != "default" {
         cmd.args(["--model", model]);
+    }
+    // 深く考えるレベルを指定（mimo-v2.5 は low/medium/high のみ対応）
+    if let Some(level) = thinking_level {
+        cmd.args(["--thinking", level]);
     }
     if model.contains("mimo") {
         cmd.args([

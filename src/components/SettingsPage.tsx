@@ -14,6 +14,7 @@ interface AppConfig {
     model: string | null;
     provider: string | null;
     base_url: string | null;
+    thinking_level: string | null;
   };
   topics: unknown[];
 }
@@ -267,6 +268,28 @@ export default function SettingsPage() {
                       })
                     }
                   />
+                </div>
+                <div className="form-group">
+                  <label>Thinking Level（思考の深さ）</label>
+                  <select
+                    className="form-select"
+                    value={config.ai.thinking_level ?? "high"}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        ai: { ...config.ai, thinking_level: e.target.value || null },
+                      })
+                    }
+                  >
+                    <option value="high">high（深く考える・推奨）</option>
+                    <option value="medium">medium</option>
+                    <option value="low">low（浅く速く）</option>
+                    <option value="auto">auto（モデル任せ）</option>
+                  </select>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                    mimo-v2.5 は low / medium / high のみ対応。high は生成が遅くなる代わりに
+                    記事の正確性が上がります。
+                  </div>
                 </div>
               </>
             )}
