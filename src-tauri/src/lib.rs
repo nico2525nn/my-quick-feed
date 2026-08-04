@@ -125,7 +125,9 @@ async fn update_config(
         .update(config)
         .map_err(|e| e.to_string())?;
     state.scheduler.stop_all().await;
-    state.scheduler.start_all(false).await;
+    // 設定保存後の再起動でも cli.no_run（起動時に実行しない）を尊重する
+    let no_run = state.config_manager.get().cli.no_run;
+    state.scheduler.start_all(no_run).await;
     Ok(())
 }
 
