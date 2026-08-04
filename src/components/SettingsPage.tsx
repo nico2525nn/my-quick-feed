@@ -178,7 +178,7 @@ export default function SettingsPage() {
                 onChange={(e) =>
                   setConfig({
                     ...config,
-                    ai: { ...config.ai, model: e.target.value },
+                    ai: { ...config.ai, model: e.target.value || null },
                   })
                 }
                 placeholder="mimo-v2.5"
@@ -281,7 +281,9 @@ export default function SettingsPage() {
               <input
                 type="checkbox"
                 checked={autostart === true}
+                disabled={autostart === null}
                 onChange={toggleAutostart}
+                title={autostart === null ? "Loading..." : undefined}
               />
               Windows起動時に自動起動する
             </label>

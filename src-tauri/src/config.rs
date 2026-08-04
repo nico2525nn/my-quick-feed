@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use parking_lot::RwLock;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::errors::AppResult;
 
@@ -55,15 +55,36 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load(path: &PathBuf) -> AppResult<Self> {
-        if !path.exists() {
-            warn!("Config file not found at {:?}, creating default", path);
-            let default = Self::default();
-            default.save(path)?;
-            return Ok(default);
+        match std::fs::read_to_string(path) {
+            // ファイルが無い/読めない → デフォルトを保存して返す（初回起動の正常系）
+            Err(_) => {
+                warn!("Config file not found at {:?}, creating default", path);
+                let default = Self::default();
+                match default.save(path) {
+                    Ok(()) => Ok(default),
+                    Err(e) => {
+                        // 保存できなくても起動は続行する（設定画面から再設定可能）
+                        error!("Failed to save default config at {:?}: {}", path, e);
+                        Ok(default)
+                    }
+                }
+            }
+            Ok(content) => {
+                // BOM 除去（PowerShell 等で保存された BOM 付き UTF-8 は serde_yaml が読めない）
+                let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+                match serde_yaml::from_str::<AppConfig>(content) {
+                    Ok(config) => Ok(config),
+                    Err(e) => {
+                        // パース失敗でクラッシュせず、デフォルトで続行（壊れた設定は上書きしない）
+                        error!(
+                            "Failed to parse config at {:?}: {} — using default (file left untouched)",
+                            path, e
+                        );
+                        Ok(Self::default())
+                    }
+                }
+            }
         }
-        let content = std::fs::read_to_string(path)?;
-        let config: AppConfig = serde_yaml::from_str(&content)?;
-        Ok(config)
     }
 
     pub fn save(&self, path: &PathBuf) -> AppResult<()> {
@@ -119,11 +140,10 @@ impl ConfigManager {
     }
 
     pub fn update(&self, new_config: AppConfig) -> AppResult<()> {
-        {
-            let mut guard = self.config.write();
-            *guard = new_config.clone();
-        }
+        // 先にファイルへ保存してからメモリを更新する（save 失敗時に
+        // メモリとファイルが不一致のまま残るのを防ぐ）
         new_config.save(&self.path)?;
+        *self.config.write() = new_config;
         Ok(())
     }
 }

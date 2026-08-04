@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface DashboardStats {
@@ -39,61 +39,80 @@ export default function Dashboard() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [recentPosts, setRecentPosts] = useState<PostSummary[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const toastTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
 
   const showToast = (msg: string, ok: boolean) => {
     setToast({ msg, ok });
-    setTimeout(() => setToast(null), 4000);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 4000);
   };
 
+  const loadingRef = useRef(false);
+
   const loadData = async () => {
-    // 各データを独立に取得（1つが失敗しても他は表示する）
+    // ポーリングのオーバーラップ防止（invoke 連鎖が interval より遅い場合）
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
-      const s = await invoke<DashboardStats>("get_stats");
-      setStats(s);
-    } catch (e) {
-      console.error("get_stats failed", e);
-    }
+      // 各データを独立に取得（1つが失敗しても他は表示する）
+      try {
+        const s = await invoke<DashboardStats>("get_stats");
+        setStats(s);
+      } catch (e) {
+        console.error("get_stats failed", e);
+      }
 
-    try {
-      const t = await invoke<TopicInfo[]>("get_topics");
-      setTopics(t);
-    } catch (e) {
-      console.error("get_topics failed", e);
-    }
+      try {
+        const t = await invoke<TopicInfo[]>("get_topics");
+        setTopics(t);
+      } catch (e) {
+        console.error("get_topics failed", e);
+      }
 
-    try {
-      const ts = await invoke<TopicStat[]>("get_topic_stats");
-      setTopicStats(ts);
-    } catch (e) {
-      console.error("get_topic_stats failed", e);
-    }
+      try {
+        const ts = await invoke<TopicStat[]>("get_topic_stats");
+        setTopicStats(ts);
+      } catch (e) {
+        console.error("get_topic_stats failed", e);
+      }
 
-    try {
-      const st = await invoke<AppStatus>("get_status");
-      setStatus(st);
-    } catch (e) {
-      console.error("get_status failed", e);
-    }
+      try {
+        const st = await invoke<AppStatus>("get_status");
+        setStatus(st);
+      } catch (e) {
+        console.error("get_status failed", e);
+      }
 
-    try {
-      const p = await invoke<PostSummary[]>("get_posts", { topic_id: "", limit: 10 });
-      setRecentPosts(p);
-    } catch (e) {
-      console.error("get_posts failed", e);
+      try {
+        const p = await invoke<PostSummary[]>("get_posts", { topicId: "", limit: 10 });
+        setRecentPosts(p);
+      } catch (e) {
+        console.error("get_posts failed", e);
+      }
+    } finally {
+      loadingRef.current = false;
     }
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     loadData();
     const interval = setInterval(loadData, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(interval);
+      clearTimeout(toastTimerRef.current);
+    };
   }, []);
 
   const handleRefresh = async (topicName: string) => {
     try {
-      await invoke("refresh_topic", { topic_name: topicName });
+      await invoke("refresh_topic", { topicName });
       showToast("Refreshed: " + topicName, true);
-      setTimeout(loadData, 1500);
+      setTimeout(() => {
+        if (mountedRef.current) loadData();
+      }, 1500);
     } catch (e) {
       showToast("Refresh failed: " + e, false);
     }
@@ -101,9 +120,16 @@ export default function Dashboard() {
 
   const statFor = (name: string) => topicStats.find((s) => s.topic_id === name);
 
+  // SQLite datetime('now') は UTC の "YYYY-MM-DD HH:MM:SS" → Z 付きで UTC 解釈する。
+  // RFC3339（get_status 等）は T 区切りなのでそのまま。
+  const parseUtc = (iso: string | null | undefined): number => {
+    if (!iso) return NaN;
+    const normalized = iso.includes("T") ? iso : iso.replace(" ", "T") + "Z";
+    return new Date(normalized).getTime();
+  };
+
   const fmtRelative = (iso: string | null | undefined) => {
-    if (!iso) return null;
-    const t = new Date(iso).getTime();
+    const t = parseUtc(iso);
     if (Number.isNaN(t)) return null;
     const diffSec = Math.round((t - Date.now()) / 1000);
     if (diffSec <= 0) return "now";
@@ -115,7 +141,9 @@ export default function Dashboard() {
 
   const fmtLastTime = (iso: string | null | undefined) => {
     if (!iso) return "never";
-    const diffSec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    const t = parseUtc(iso);
+    if (Number.isNaN(t)) return "never";
+    const diffSec = Math.round((Date.now() - t) / 1000);
     if (diffSec < 60) return "just now";
     if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
     if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
@@ -150,12 +178,16 @@ export default function Dashboard() {
       <div className="page-header">
         <h1>Dashboard</h1>
         <div className="status-pill">
-          <span className={`status-dot ${status?.running === false ? "idle" : ""}`} />
-          {status?.running === false ? "Stopped" : "Running"}
+          <span
+            className={`status-dot ${
+              status === null ? "" : status.running ? "" : "idle"
+            }`}
+          />
+          {status === null ? "..." : status.running ? "Running" : "Stopped"}
         </div>
       </div>
       <div className="page-body">
-        <div className="stats-bar" style={{ marginBottom: 24 }}>
+        <div className="stats-bar">
           <div className="stat-card">
             <span className="stat-icon">{"\u{1F4E1}"}</span>
             <div className="stat-info">

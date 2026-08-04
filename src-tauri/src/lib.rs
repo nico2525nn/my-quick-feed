@@ -265,17 +265,21 @@ pub fn run() {
         .map(|a| std::path::PathBuf::from(a).join("com.myquickfeed.app").join("logs"))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     std::fs::create_dir_all(&log_dir).ok();
-    let file_layer = {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("app.log"))
-            .expect("Failed to open log file");
-        tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_level(true)
-            .with_writer(file)
-    };
+    // ログファイルを開けない場合（ロック・パーミッション等）も起動を継続する
+    let file_layer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("app.log"))
+        .ok()
+        .map(|file| {
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_writer(file)
+        });
+    if file_layer.is_none() {
+        eprintln!("[my-quick-feed] WARN: failed to open log file, continuing without file logging");
+    }
 
     tracing_subscriber::registry()
         .with(stdout_layer)

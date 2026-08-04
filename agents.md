@@ -123,7 +123,9 @@ omp -p --model mimo-v2.5 --append-system-prompt "あなたはタスク実行エ�
 3. **stdin 経由ではプロンプトを渡せない**。`omp -p` は引数 or `@file` でのみ受け取る。
 4. **ウインドウが出る** → `CREATE_NO_WINDOW` (0x08000000) フラグが必要（`tokio::process::Command` の `creation_flags`）。tokio の Command は `creation_flags` を inherent メソッドとして持つ。
 5. **セッション汚染** → 作業ディレクトリを `%TEMP%\my-quick-feed\omp\` に分離すること（`current_dir()` 指定）。OMP のセッションは `{cwd}/.omp/agent/sessions/` に作られる。
-   - **重要（2026-08-03 実測）**: セッションは **`%USERPROFILE%\.omp\agent\sessions\`（グローバル）にも作られ、実行のたびに溜まり続ける**。ディレクトリ名は cwd パス由来。`cleanup_omp_sessions()` はこのグローバルディレクトリからもこのアプリの OMP 実行由来セッションを削除する（旧命名はプレフィックス一致: `-AppData-Local-Temp-my-quick-feed-omp` / `--D--quickfeed`、**新命名 `abs-<basename>-<sha256>` は完全一致のみ**。アプリ自身の実行は `abs-omp-<sha256(%TEMP%\my-quick-feed\omp を前方スラッシュ化)>` になる）。他プロジェクトのセッションには触れない。
+   - **⚠ 方針（ユーザー指定 2026-08-03）**: **セッションの削除は行わない**。ユーザーの当初の意図は「OMP の実行フォルダを %TEMP% に退避してセッションを分離する」だけで、セッションファイルの削除は求めていない。`cleanup_omp_sessions()` は勝手に追加された機能で実害（下記）を起こしたため、**完全に削除済み**。以後、セッション削除系のコードを追加しないこと。cwd 分離のみで対応する。
+   - **重要（2026-08-03 実測）**: セッションは **`%USERPROFILE%\.omp\agent\sessions\`（グローバル）にも作られ、実行のたびに溜まり続ける**。ディレクトリ名は cwd パス由来。**削除しない方針のため、溜まるのは許容**（害はディスク消費のみ）。他プロジェクトのセッションには絶対に触れない。
+   - **⚠ 命名規則の実測（2026-08-03 重要）**: 新命名のプレフィックスは **cwd がホームディレクトリ配下なら `home-`、ホーム外なら `abs-`**。実測: %TEMP%\my-quick-feed\omp で `omp -p` 実行 → **`home-omp-<sha256>` が作られた**（hash = cwd を前方スラッシュ化した文字列の SHA-256。`C:/Users/nico/AppData/Local/Temp/my-quick-feed/omp` → d61fb329… で一致確認済み）。D:\学校\app\my-quick-feed では `abs-my-quick-feed-c363672c…`。**cleanup は `abs-` と `home-` の両方を完全一致で判定する**（2026-08-03 修正・実機検証済み: アプリ起動で `home-omp-<hash>` が削除され、ユーザーセッションは残存）。`home-` のプレフィックス一致も絶対にしないこと（他のホーム配下プロジェクトを巻き込む）。
    - **⚠ 重大な教訓（2026-08-03、実害あり）**: `abs-my-quick-feed-` のプレフィックス一致で削除すると、**ユーザーが `D:\学校\app\my-quick-feed` で対話的に使っている本物のセッションまで削除する**（`abs-my-quick-feed-c363672c…` = ユーザー作業ディレクトリの cwd ハッシュ。2026-07-15 の初期構築セッションがこのバグで消えた）。絶対にプレフィックス一致に戻さないこと。
    - **復元方法（実績あり 2026-08-03）**: `.jsonl` が消えても `~/.omp/agent/history.db` の `history` テーブル（`session_id` 列）にユーザーメッセージ全文が残っている。同IDの `.jsonl` を `title` / `session`(version 3) / `model_change` / `thinking_level_change` / `message` / `title_change` の行形式で再構築すれば resume 可能（検証は `omp --export <file> <out.html>` でロード確認）。
 6. **コマンドライン長制限** → Windows は 8191 文字まで。プロンプトが 30〜70KB になるので **必ず `@file` 方式** を使う。
@@ -291,6 +293,7 @@ topics:
 - **429（レート制限）対策**: Retry-After ヘッダーを尊重しつつ、最大5回リトライ（5/10/15/20/25秒バックオフ、実装済み）
 - パースエラー時はレスポンスの先頭200文字をエラーに含めてデバッグ可能に（実装済み）
 - ソース間のリクエストに 2 秒のディレイ（Reddit のレート制限回避、実装済み）
+- **⚠ RSSHUB の URL 二重結合（2026-08-04 修正）**: 設定が `url: "https://rsshub.app/twitter/user/PlayApex"`（フル URL）で base_url/path 未指定の場合、旧実装はデフォルト base_url と結合して `https://rsshub.app/https://rsshub.app/...` の二重 URL になり 403 になる。**`path` が http(s):// で始まる場合はそのまま使う**よう修正（`build_rsshub_url`）。設定は url フル指定でも base_url+path 形式でも動く。
 
 ### 7.2 フロントエンド
 
@@ -300,6 +303,11 @@ topics:
 - **テーマ**: 黒背景 `#0a0a0c` ベース。色はアクセント（状態表示）のみ。グラデーション禁止（ユーザー指示）
 - Sidebar: ナビは Dashboard/Topics/Logs の3つ。Settings は下部の独立ボタン（`.sidebar-settings`）
 - Dashboard: 稼働状態ピル（Running/Stopped）、トピックカードに記事数・最終投稿時刻・次回実行カウントダウン
+- **⚠ Tauri v2 の invoke 引数は camelCase 必須（重大・2026-08-04 修正）**: Rust 側のパラメータが `topic_id` でも、JS 側は `{ topicId }` で渡す。snake_case で渡すと「missing field `topicId`」エラーで**静かに失敗**する。これが「Refresh ボタンが効かない」問題の根本原因だった（以前はトーストで可視化しただけで、原因は直っていなかった）。Dashboard の `get_posts`/`refresh_topic`、TopicsPage の `refresh_topic` を修正済み。
+- **⚠ SQLite の `created_at` は UTC**（`datetime('now')` = "YYYY-MM-DD HH:MM:SS"）。`new Date(iso)` にそのまま渡すとローカル時刻として解釈され、JST で 9 時間ずれる。**`iso.replace(" ", "T") + "Z"` で UTC 解釈すること**（2026-08-04 修正。fmtRelative/fmtLastTime は共通の `parseUtc` を使う）。
+- **TopicsPage のリネームバグ（2026-08-04 修正）**: 既存トピックの名前を変更して保存すると、`t.name === editing.name`（編集後の名前）でマッチングして一致せず、**更新が黙って消える**。編集開始時に元の名前を `originalName` に保存してマッチングすること。
+- **BrowserRouter は Tauri で使わない**（2026-08-04 修正）: 非ルートパス（/topics 等）でのリロード時に WebView2 が index.html を返さず 404 になる。**HashRouter を使用**。
+- トピック保存時はバリデーション必須（名前空・ソース URL 空・重複名を弾く。2026-08-04 実装）。失敗は console.error でなくユーザーに見えるメッセージで（保存の無言消失防止）。
 
 ### 7.3 ログ
 
@@ -313,8 +321,9 @@ topics:
 ### 7.4 スケジューラ
 
 - **`tokio::time::interval` の最初の tick は即発火する**。起動時即実行（1回）+ ループの最初の tick で2回連続実行される罠がある。**`timer.tick().await` を一度消費してからループに入る**こと（実装済み）。
+- **2026-08-04 変更**: interval 方式をやめ、**「実行完了後に sleep(interval)」方式**にした。パイプライン実行が interval より長い（例: OMP 180s タイムアウト vs interval 60s）と、interval の即発火で実行完了直後に連続実行されるため。次回実行予定時刻も実実行ベースで正確になる。
+- **⚠ 同一トピックの並行実行ガード（2026-08-04 実装）**: 手動 `refresh_topic` とスケジューラ定期実行が同時に走ると、重複防止（直近タイトル）が実行開始時のスナップショットなので**二重投稿する**。Scheduler に `running` マップを追加し、実行中なら定期実行はスキップ / refresh はエラーを返す。
 - 次回実行予定時刻を `Arc<SyncMutex<HashMap<String, DateTime<Local>>>>` で保持し、`get_status` IPC で Dashboard に表示（実装済み）。
-- OMP セッションクリーンアップは起動時とパイプライン実行前に行う（`cleanup_omp_sessions()`、実装済み）。
 
 ### 7.5 Git
 

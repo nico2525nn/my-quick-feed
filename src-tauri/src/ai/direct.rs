@@ -4,6 +4,22 @@ use crate::ai::{ArticleResult, resolve_system_prompt};
 use crate::config::TopicConfig;
 use crate::errors::{AppError, AppResult};
 
+/// Chat Completions の URL を組み立てる。
+/// - 完全なエンドポイント（/chat/completions 終端）→ そのまま
+/// - OpenAI 互換のベース URL（/v1 終端）→ /chat/completions のみ追記
+/// - それ以外 → /v1/chat/completions を追記
+/// （二重付与防止: デフォルト base_url は /v1 終端のことが多い）
+fn build_chat_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else if trimmed.ends_with("/v1") {
+        format!("{}/chat/completions", trimmed)
+    } else {
+        format!("{}/v1/chat/completions", trimmed)
+    }
+}
+
 /// Direct モード: OpenAI互換 Chat Completions API を直接呼び出す
 pub async fn call_direct_api(
     api_key: &str,
@@ -28,7 +44,7 @@ pub async fn call_direct_api(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let url = build_chat_url(base_url);
 
     let body = serde_json::json!({
         "model": model,
@@ -103,14 +119,13 @@ fn parse_direct_response(content: &str) -> AppResult<ArticleResult> {
         }
     }
 
-    warn!("Could not parse structured JSON from API response, using raw text");
-    Ok(ArticleResult {
-        title: "Generated Article".to_string(),
-        content: content.to_string(),
-        image_url: None,
-        tags: vec![],
-        sources: vec![],
-    })
+    warn!(
+        "Could not parse structured JSON from API response ({} chars), rejecting",
+        content.len()
+    );
+    Err(AppError::Api(
+        "Direct API response was not valid JSON".into(),
+    ))
 }
 
 #[cfg(test)]
@@ -122,5 +137,27 @@ mod tests {
         let content = r#"{"title":"Test","content":"Body","image_url":null,"tags":[],"sources":["A"]}"#;
         let result = parse_direct_response(content).unwrap();
         assert_eq!(result.title, "Test");
+    }
+
+    #[test]
+    fn test_parse_direct_rejects_non_json() {
+        // AI が JSON でない応答を返した場合はエラー（ダミー記事を投稿しない）
+        let result = parse_direct_response("I'm sorry, I can't do that.");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_chat_url() {
+        // 完全なエンドポイント
+        let u = build_chat_url("https://opencode.ai/zen/go/v1/chat/completions");
+        assert_eq!(u, "https://opencode.ai/zen/go/v1/chat/completions");
+        // OpenAI 互換のベース URL（/v1 終端）
+        let u = build_chat_url("https://api.openai.com/v1");
+        assert_eq!(u, "https://api.openai.com/v1/chat/completions");
+        let u = build_chat_url("https://openrouter.ai/api/v1/");
+        assert_eq!(u, "https://openrouter.ai/api/v1/chat/completions");
+        // ベース URL のみ
+        let u = build_chat_url("https://example.com");
+        assert_eq!(u, "https://example.com/v1/chat/completions");
     }
 }

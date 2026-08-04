@@ -14,7 +14,13 @@ impl DiscordClient {
     pub fn new(token: &str) -> Self {
         Self {
             token: token.to_string(),
-            http_client: reqwest::Client::new(),
+            // タイムアウト必須（reqwest デフォルトは no timeout でハングすると
+            // スケジューラループ全体が停止する）
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("Failed to build HTTP client"),
         }
     }
 

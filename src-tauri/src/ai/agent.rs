@@ -96,15 +96,25 @@ JSON以外の出力は絶対に含めないでください。
     let _ = std::fs::create_dir_all(&work_dir);
 
     // プロンプトファイル（記事リスト込み）を作業ディレクトリに書き込み
-    let prompt_path = work_dir.join("prompt.txt");
+    // 複数トピックの並行実行で上書きし合わないよう、トピック名+タイムスタンプでユニークにする
+    let safe_name: String = topic
+        .name
+        .chars()
+        .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let prompt_path = work_dir.join(format!("{}-{}.txt", safe_name, ts));
     let has_file = std::fs::write(&prompt_path, &prompt).is_ok();
 
     let result = tokio::time::timeout(Duration::from_secs(timeout_sec), async {
         let exec_started = std::time::Instant::now();
         let output = if has_file {
-            run_omp_file(&work_dir, &prompt_path, model).await
+            run_omp_file(command, &work_dir, &prompt_path, model).await
         } else {
-            run_omp_direct(&prompt, model).await
+            run_omp_direct(command, &prompt, model).await
         };
         let elapsed = exec_started.elapsed();
         match &output {
@@ -142,8 +152,13 @@ JSON以外の出力は絶対に含めないでください。
     }
 }
 
-async fn run_omp_file(work_dir: &PathBuf, prompt_path: &PathBuf, model: &str) -> AppResult<Vec<ArticleResult>> {
-    let mut cmd = Command::new("omp");
+async fn run_omp_file(
+    command: &str,
+    work_dir: &PathBuf,
+    prompt_path: &PathBuf,
+    model: &str,
+) -> AppResult<Vec<ArticleResult>> {
+    let mut cmd = Command::new(command);
     cmd.args(["-p"]);
     // モデルを明示指定（プロンプト内の「## 使用モデル」だけでは確実でない）
     if !model.is_empty() && model != "default" {
@@ -171,8 +186,8 @@ async fn run_omp_file(work_dir: &PathBuf, prompt_path: &PathBuf, model: &str) ->
     parse_omp_output(output)
 }
 
-async fn run_omp_direct(prompt: &str, model: &str) -> AppResult<Vec<ArticleResult>> {
-    let mut cmd = Command::new("omp");
+async fn run_omp_direct(command: &str, prompt: &str, model: &str) -> AppResult<Vec<ArticleResult>> {
+    let mut cmd = Command::new(command);
     cmd.args(["-p"]);
     if !model.is_empty() && model != "default" {
         cmd.args(["--model", model]);
@@ -195,70 +210,6 @@ async fn run_omp_direct(prompt: &str, model: &str) -> AppResult<Vec<ArticleResul
         .await
         .map_err(|e| AppError::Agent(format!("omp exec failed: {}", e)))?;
     parse_omp_output(output)
-}
-
-/// OMP のグローバルセッションディレクトリ名を計算する。
-/// OMP は cwd を前方スラッシュに正規化した SHA-256 を使い、
-/// `abs-<basename>-<sha256hex>` の名前でセッションディレクトリを作る（実測・検証済み）。
-/// 例: cwd = D:\学校\app\my-quick-feed → abs-my-quick-feed-c363672c5617d…
-///
-/// ⚠ 絶対に `abs-my-quick-feed-` のようなプレフィックス一致にしてはいけない。
-/// その名前は「このアプリの OMP 実行」ではなく、ユーザーが D:\学校\app\my-quick-feed で
-/// 対話的に使っている本物のセッションディレクトリを指す（2026-08-03 実害あり）。
-/// アプリ自身の OMP 実行（cwd = %TEMP%\my-quick-feed\omp）のディレクトリ名は
-/// `abs-omp-<sha256>` になるため、完全一致で判定する。
-fn omp_abs_session_dir_name(work: &std::path::Path) -> String {
-    use sha2::{Digest, Sha256};
-    let normalized = work.to_string_lossy().replace('\\', "/");
-    let hash = Sha256::digest(normalized.as_bytes());
-    let base = work
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "omp".to_string());
-    format!("abs-{}-{:x}", base, hash)
-}
-
-/// セッションディレクトリをクリーンアップ（アプリ起動時・パイプライン実行前に呼ぶ）
-pub fn cleanup_omp_sessions() {
-    let mut removed = 0usize;
-
-    // 1) ローカル作業ディレクトリ配下のセッション
-    let sessions = omp_work_dir().join(".omp").join("agent").join("sessions");
-    if let Ok(entries) = std::fs::read_dir(&sessions) {
-        for entry in entries.flatten() {
-            if std::fs::remove_dir_all(entry.path()).is_ok() {
-                removed += 1;
-            }
-        }
-    }
-
-    // 2) OMP のグローバルセッションディレクトリ（%USERPROFILE%\.omp\agent\sessions）。
-    //    OMP は cwd に関係なくセッションをここに保存するため、実行のたびに溜まり続ける。
-    //    このアプリの OMP 実行（cwd = %TEMP%\my-quick-feed\omp）由来のセッションだけを削除する。
-    //    旧命名（-AppData-Local-Temp-my-quick-feed-omp / --D--quickfeed）はプレフィックス一致、
-    //    新命名（abs-<basename>-<sha256>）は完全一致で判定する（プレフィックス一致は実害あり・上記参照）。
-    let global = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(omp_work_dir)
-        .join(".omp")
-        .join("agent")
-        .join("sessions");
-    let abs_name = omp_abs_session_dir_name(&omp_work_dir());
-    if let Ok(entries) = std::fs::read_dir(&global) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_mqf = name.starts_with("-AppData-Local-Temp-my-quick-feed-omp")
-                || name.starts_with("--D--quickfeed")
-                || name == abs_name;
-            if is_mqf && std::fs::remove_dir_all(entry.path()).is_ok() {
-                removed += 1;
-            }
-        }
-    }
-
-    if removed > 0 {
-        info!("Cleaned {} OMP session(s)", removed);
-    }
 }
 
 #[cfg(target_os = "windows")]

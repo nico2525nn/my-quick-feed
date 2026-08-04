@@ -34,11 +34,6 @@ export default function Sidebar() {
         <span className="nav-icon">{"\u2699\uFE0F"}</span>
         Settings
       </button>
-
-      <div className="sidebar-status">
-        <span className="status-dot" />
-        Running
-      </div>
     </aside>
   );
 }

@@ -106,7 +106,14 @@ impl Pipeline {
         );
 
         // Step 2: 直近2日分の投稿タイトルを取得（重複防止用）
-        let recent_titles = self.db.get_recent_titles(tn, RECENT_TITLE_DAYS).unwrap_or_default();
+        let recent_titles = match self.db.get_recent_titles(tn, RECENT_TITLE_DAYS) {
+            Ok(t) => t,
+            Err(e) => {
+                // エラー時は重複防止が効かない（再投稿の可能性）ためログで明示する
+                error!(topic = %tn, "直近タイトル取得失敗（重複防止が効きません）: {}", e);
+                Vec::new()
+            }
+        };
         if !recent_titles.is_empty() {
             info!(topic = %tn, "直近{}日分の投稿タイトル: {} 件", RECENT_TITLE_DAYS, recent_titles.len());
             for (i, t) in recent_titles.iter().take(5).enumerate() {
@@ -135,7 +142,7 @@ impl Pipeline {
             _ => {
                 let cmd = config.ai.agent_command.as_deref().unwrap_or("omp");
                 let model = config.ai.model.as_deref().unwrap_or("mimo-v2.5");
-                let timeout = config.ai.agent_timeout_sec.unwrap_or(180);
+                let timeout = config.ai.agent_timeout_sec.unwrap_or(180).max(30);
                 info!(topic = %tn, "Agent呼び出し [cmd={}, model={}, timeout={}s]", cmd, model, timeout);
                 run_agent(cmd, model, timeout, topic, &all_items, &recent_titles).await?
             }
@@ -163,7 +170,14 @@ impl Pipeline {
         // Step 4: Post each article（通常メッセージ・Markdown、Embed枠なし）
         if let Some(discord) = &self.discord {
             let dc = config.discord.clone();
-            let thread_id = self.db.get_topic_thread(tn).ok().flatten();
+            let thread_id = match self.db.get_topic_thread(tn) {
+                Ok(opt) => opt,
+                Err(e) => {
+                    // DB エラーで「スレッドなし」誤判定すると重複スレッドができるため中断する
+                    error!(topic = %tn, "スレッドID取得失敗: {}", e);
+                    return Err(e);
+                }
+            };
 
             // スレッドが無ければ作成し、トピック説明文を最初の投稿に
             let thread_id = match thread_id {
@@ -179,13 +193,16 @@ impl Pipeline {
                     info!(topic = %tn, "新規スレッド作成: {}", topic.name);
                     match discord.create_thread(&dc, &topic.name, &desc).await {
                         Ok((_, tid)) => {
-                            self.db.set_topic_thread(tn, &tid).ok();
+                            if let Err(e) = self.db.set_topic_thread(tn, &tid) {
+                                warn!(topic = %tn, "スレッドID保存失敗（次回実行で再作成を試みます）: {}", e);
+                            }
                             info!(topic = %tn, "スレッド作成OK: {}", tid);
                             tid
                         }
                         Err(e) => {
+                            // 失敗を呼び出し元に通知して再試行可能にする（成功扱いにしない）
                             error!(topic = %tn, "スレッド作成失敗: {}", e);
-                            return Ok(());
+                            return Err(AppError::Discord(format!("スレッド作成失敗: {}", e)));
                         }
                     }
                 }
@@ -207,11 +224,16 @@ impl Pipeline {
                             i + 1, article.title, msg_id,
                             post_started.elapsed().as_secs_f64()
                         );
-                        self.db.insert_post(tn, &article.title, &article.content, img, tags_json.as_deref()).ok();
+                        // 投稿成功時のみ DB に記録（失敗分は次回実行で再試行する）
+                        if let Ok(post_id) = self.db.insert_post(
+                            tn, &article.title, &article.content, img, tags_json.as_deref(),
+                        ) {
+                            let _ = self.db.update_post_discord(post_id, &msg_id, Some(&thread_id));
+                        }
                     }
                     Err(e) => {
+                        // DB には記録しない（直近タイトルの重複防止リストに入ると再試行されなくなる）
                         error!(topic = %tn, "投稿失敗 [{}]: \"{}\" — {}", i + 1, article.title, e);
-                        self.db.insert_post(tn, &article.title, &article.content, img, tags_json.as_deref()).ok();
                     }
                 }
             }

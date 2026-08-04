@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface SourceConfig {
@@ -66,6 +66,16 @@ export default function TopicsPage() {
   const [editing, setEditing] = useState<TopicConfig | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [autoPrompt, setAutoPrompt] = useState(false);
+  // 編集開始時のトピック名（リネーム時に元の名前でマッチングする）
+  const [originalName, setOriginalName] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
+  const messageTimerRef = useRef<number | undefined>(undefined);
+
+  const showMessage = (type: string, text: string) => {
+    setMessage({ type, text });
+    clearTimeout(messageTimerRef.current);
+    messageTimerRef.current = window.setTimeout(() => setMessage(null), 4000);
+  };
 
   // 新規トピック作成時: 名前/言語の変更に応じてプロンプトを自動生成
   const updateEditing = (updates: Partial<TopicConfig>) => {
@@ -91,16 +101,37 @@ export default function TopicsPage() {
 
   useEffect(() => {
     loadConfig();
+    return () => {
+      clearTimeout(messageTimerRef.current);
+    };
   }, []);
 
   const handleSave = async () => {
     if (!config || !editing) return;
+    // バリデーション: 名前必須・重複禁止・ソース URL 必須
+    if (!editing.name.trim()) {
+      showMessage("error", "Topic name is required");
+      return;
+    }
+    if (editing.sources.length === 0) {
+      showMessage("error", "At least one source is required");
+      return;
+    }
+    if (editing.sources.some((s) => !s.url.trim())) {
+      showMessage("error", "All sources require a URL");
+      return;
+    }
     const updated = { ...config };
     if (isNew) {
+      if (updated.topics.some((t) => t.name === editing.name)) {
+        showMessage("error", "A topic with this name already exists");
+        return;
+      }
       updated.topics = [...updated.topics, editing];
     } else {
+      // リネームされても元の名前でマッチングする（名前変更で保存が消えるバグ対策）
       updated.topics = updated.topics.map((t) =>
-        t.name === editing.name ? editing : t
+        t.name === originalName ? editing : t
       );
     }
     try {
@@ -108,8 +139,10 @@ export default function TopicsPage() {
       setConfig(updated);
       setEditing(null);
       setIsNew(false);
+      setAutoPrompt(false);
+      showMessage("success", "Saved");
     } catch (e) {
-      console.error("Failed to save topic", e);
+      showMessage("error", `Failed to save topic: ${e}`);
     }
   };
 
@@ -122,16 +155,18 @@ export default function TopicsPage() {
     try {
       await invoke("update_config", { config: updated });
       setConfig(updated);
+      showMessage("success", "Deleted: " + name);
     } catch (e) {
-      console.error("Failed to delete topic", e);
+      showMessage("error", `Failed to delete topic: ${e}`);
     }
   };
 
   const handleRefresh = async (name: string) => {
     try {
-      await invoke("refresh_topic", { topic_name: name });
+      await invoke("refresh_topic", { topicName: name });
+      showMessage("success", "Refreshed: " + name);
     } catch (e) {
-      console.error("Refresh failed", e);
+      showMessage("error", `Refresh failed: ${e}`);
     }
   };
 
@@ -139,11 +174,17 @@ export default function TopicsPage() {
     setEditing(emptyTopic());
     setIsNew(true);
     setAutoPrompt(true);
+    setOriginalName(null);
+    setMessage(null);
   };
 
   const openEdit = (topic: TopicConfig) => {
     setEditing({ ...topic });
     setIsNew(false);
+    // 既存トピックの手書きプロンプトを自動生成で上書きしない
+    setAutoPrompt(false);
+    setOriginalName(topic.name);
+    setMessage(null);
   };
 
   const addSource = () => {
@@ -178,6 +219,26 @@ export default function TopicsPage() {
         </button>
       </div>
       <div className="page-body">
+        {message && (
+          <div
+            style={{
+              padding: "10px 16px",
+              borderRadius: "var(--radius-sm)",
+              marginBottom: 16,
+              background:
+                message.type === "success"
+                  ? "rgba(63, 185, 80, 0.15)"
+                  : "rgba(248, 81, 73, 0.15)",
+              color:
+                message.type === "success"
+                  ? "var(--accent-green)"
+                  : "var(--accent-red)",
+              fontSize: 13,
+            }}
+          >
+            {message.text}
+          </div>
+        )}
         {config.topics.length === 0 && (
           <div className="empty-state">
             <div className="empty-icon">{"\u{1F4ED}"}</div>
@@ -248,7 +309,9 @@ export default function TopicsPage() {
                 <select
                   className="form-select"
                   value={editing.language ?? "ja"}
-                  onChange={(e) => updateEditing({ language: e.target.value })}
+                  onChange={(e) =>
+                    updateEditing({ language: e.target.value || "ja" })
+                  }
                 >
                   <option value="ja">Japanese</option>
                   <option value="en">English</option>
@@ -264,7 +327,11 @@ export default function TopicsPage() {
                   min={1}
                   value={editing.interval_min}
                   onChange={(e) =>
-                    setEditing({ ...editing, interval_min: parseInt(e.target.value) || 60 })
+                    setEditing({
+                      ...editing,
+                      // 0/負数はバックエンドの .max(1) に任せず UI でクランプする
+                      interval_min: Math.max(1, parseInt(e.target.value) || 60),
+                    })
                   }
                 />
               </div>
