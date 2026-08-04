@@ -29,6 +29,31 @@ pub struct AiConfig {
     pub session_reuse: bool,
 }
 
+/// 起動時オプションのデフォルト（YAML `cli:` セクション）。
+/// コマンドライン引数（--no-post / --run-once 等）より優先度は低く、
+/// 引数が明示された場合は引数が勝つ。Settings 画面からも編集できる。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CliConfig {
+    /// 起動時ドライラン（--no-post 相当）
+    #[serde(default)]
+    pub no_post: bool,
+    /// 起動時 1 回だけ実行して終了（--run-once 相当）
+    #[serde(default)]
+    pub run_once: bool,
+    /// 起動時の即実行をスキップ（--no-run 相当。スケジューラは動き、定期実行から始める）
+    #[serde(default)]
+    pub no_run: bool,
+    /// --run-once 時の対象トピック（空なら全トピック）
+    #[serde(default)]
+    pub topic: Option<String>,
+    /// ログをコンソールにも出力（--console 相当）
+    #[serde(default)]
+    pub console: bool,
+    /// 詳細ログ（--verbose 相当）
+    #[serde(default)]
+    pub verbose: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceConfig {
     #[serde(rename = "type")]
@@ -68,6 +93,9 @@ pub struct AppConfig {
     pub discord: DiscordConfig,
     pub ai: AiConfig,
     pub topics: Vec<TopicConfig>,
+    /// 起動時オプションのデフォルト（YAML `cli:` セクション、任意）
+    #[serde(default)]
+    pub cli: CliConfig,
 }
 
 impl AppConfig {
@@ -135,6 +163,7 @@ impl Default for AppConfig {
                 session_reuse: false,
             },
             topics: vec![],
+            cli: CliConfig::default(),
         }
     }
 }

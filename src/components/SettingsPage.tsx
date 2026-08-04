@@ -17,6 +17,14 @@ interface AppConfig {
     thinking_level: string | null;
     session_reuse: boolean;
   };
+  cli: {
+    no_post: boolean;
+    run_once: boolean;
+    no_run: boolean;
+    topic: string | null;
+    console: boolean;
+    verbose: boolean;
+  };
   topics: unknown[];
 }
 
@@ -323,6 +331,99 @@ export default function SettingsPage() {
                 title={autostart === null ? "Loading..." : undefined}
               />
               Windows起動時に自動起動する
+            </label>
+          </div>
+        </div>
+
+        {/* Launch Options (cli defaults) */}
+        <div className="settings-section">
+          <h2>起動オプション（デフォルト）</h2>
+          <div className="settings-card">
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+              次回起動時のデフォルト動作です。コマンドライン引数（run.bat に
+              --no-post 等を渡す）が指定された場合はそちらが優先されます。
+            </div>
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={config.cli?.no_post ?? false}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    cli: { ...config.cli, no_post: e.target.checked },
+                  })
+                }
+              />
+              ドライラン（--no-post）— 生成のみ・Discord投稿とDB保存をしない
+            </label>
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={config.cli?.run_once ?? false}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    cli: { ...config.cli, run_once: e.target.checked },
+                  })
+                }
+              />
+              起動時に1回だけ実行して終了（--run-once）
+            </label>
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={config.cli?.no_run ?? false}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    cli: { ...config.cli, no_run: e.target.checked },
+                  })
+                }
+              />
+              起動時に実行しない（--no-run）— UI だけ起動し、定期実行・手動 Refresh から始める
+            </label>
+            {config.cli?.run_once && (
+              <div className="form-group" style={{ marginTop: 8 }}>
+                <label>対象トピック（--topic、空なら全トピック）</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={config.cli?.topic ?? ""}
+                  placeholder="例: APEXまとめ"
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      cli: { ...config.cli, topic: e.target.value || null },
+                    })
+                  }
+                />
+              </div>
+            )}
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={config.cli?.console ?? false}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    cli: { ...config.cli, console: e.target.checked },
+                  })
+                }
+              />
+              ログをコンソールにも出力（--console）
+            </label>
+            <label className="form-checkbox">
+              <input
+                type="checkbox"
+                checked={config.cli?.verbose ?? false}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    cli: { ...config.cli, verbose: e.target.checked },
+                  })
+                }
+              />
+              詳細ログ（--verbose）
             </label>
           </div>
         </div>

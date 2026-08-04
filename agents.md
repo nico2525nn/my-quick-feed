@@ -224,16 +224,33 @@ POST /channels/{thread_id}/messages
 - スレッド作成時はトピック説明文を最初の投稿にする（spec 準拠）。
 - **トピックごとの投稿チャンネル（2026-08-04 実装）**: `TopicConfig.forum_channel_id`（任意）を追加。指定があればそのトピックはそのチャンネルに投稿、無ければグローバル設定 `discord.forum_channel_id` を使う。TopicsPage の編集フォームに「Forum Channel ID」欄あり。
 
-### 4.4 起動オプション（2026-08-04 実装・体系化）
+### 4.4 起動オプション（2026-08-04 実装・体系化 / 2026-08-05 拡張）
 
 | オプション | 効果 |
 |---|---|
 | `--no-post` | **ドライラン**: 記事生成はするが Discord 投稿・DB 保存をしない（DB に保存すると重複防止リストに入り、後で投稿できなくなるため）。生成記事はログに出力（タイトル + 本文先頭150字） |
 | `--console` | ログをコンソールにも出力（親コンソールがあればアタッチ、無ければ新しいコンソールウィンドウを開く。通常は GUI アプリなので stdout は捨てられる） |
 | `--run-once` | スケジューラを起動せず、パイプラインを 1 回実行して**自動終了**（exit 0。CI/テスト用。2026-08-04 実機検証済み） |
+| `--no-run` | **起動時の即実行をスキップ**（2026-08-05 追加）。UI だけ起動し、スケジューラは動く（定期実行・手動 Refresh から始まる）。「生成も取得もしないでとりあえず起動」用。実機検証済み |
 | `--topic <name>` | `--run-once` の実行対象トピックを限定（省略時は全トピック） |
 | `--config <path>` | 設定ファイルパスを指定（省略時は %APPDATA% のデフォルト。ログ・DB は %APPDATA% のまま） |
 | `--verbose` / `--debug` | ログレベルを debug に上げる |
+| `--post` | YAML `cli.no_post: true` を上書きして投稿を有効化（2026-08-05 追加） |
+| `--scheduler` | YAML `cli.run_once: true` を上書きして通常起動（スケジューラ）に戻す（2026-08-05 追加） |
+
+**YAML `cli:` セクション（2026-08-05 追加・実機検証済み）**: 起動オプションの**デフォルト**を設定ファイルに書ける。コマンドライン引数が明示された場合は引数が優先。Settings 画面の「起動オプション（デフォルト）」セクションからも編集・保存できる。
+
+```yaml
+cli:
+  no_post: true      # --no-post 相当
+  run_once: false    # --run-once 相当
+  no_run: false      # --no-run 相当（起動時即実行スキップ）
+  topic: ""          # --topic 相当（空なら全トピック）
+  console: false     # --console 相当
+  verbose: false     # --verbose 相当
+```
+
+実装: main.rs で `load_config_cli()`（lib.rs）により `AppConfig::load` から `cli` を取得し、コマンドライン引数とマージ。scheduler は `start_all(skip_initial_run)` / `start_topic(topic, skip_initial_run)` で即実行を制御（update_config 後の再起動は常に即実行）。
 
 `run.bat` は引数をアプリに渡す（`run.bat --no-post --run-once --topic "APEXまとめ"` 等）。**実用例**: テストは `my-quick-feed.exe --no-post --run-once` で起動すれば、投稿されずにパイプラインを 1 回検証して終了する。引数パースは main.rs の `CliArgs` 構造体（lib.rs 定義）に集約。
 

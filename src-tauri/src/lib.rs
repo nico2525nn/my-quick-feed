@@ -21,6 +21,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
+use crate::errors::AppResult;
 use config::{AppConfig, ConfigManager, TopicConfig};
 use db::{Database, LogEntry};
 use discord::DiscordClient;
@@ -124,7 +125,7 @@ async fn update_config(
         .update(config)
         .map_err(|e| e.to_string())?;
     state.scheduler.stop_all().await;
-    state.scheduler.start_all().await;
+    state.scheduler.start_all(false).await;
     Ok(())
 }
 
@@ -478,10 +479,18 @@ pub struct CliArgs {
     pub run_once: bool,
     /// --run-once 時に実行するトピック名（省略時は全トピック）
     pub topic_filter: Option<String>,
+    /// 起動時の即実行をスキップする（--no-run）
+    pub no_initial_run: bool,
     /// 設定ファイルパス（--config、省略時は %APPDATA% のデフォルト）
     pub config_path: Option<std::path::PathBuf>,
     /// ログレベルを debug に上げる（--verbose）
     pub verbose: bool,
+}
+
+/// 設定ファイルの `cli:` セクションを読み込む（起動オプションのデフォルト用・main.rs から呼ぶ）。
+/// ファイルが無い・壊れている場合はデフォルト（全て off）を返す。
+pub fn load_config_cli(path: &std::path::Path) -> AppResult<config::CliConfig> {
+    Ok(config::AppConfig::load(&path.to_path_buf())?.cli)
 }
 
 pub fn run(cli: CliArgs) {
@@ -642,7 +651,7 @@ pub fn run(cli: CliArgs) {
             } else {
                 let scheduler_clone = scheduler.clone();
                 tauri::async_runtime::spawn(async move {
-                    scheduler_clone.start_all().await;
+                    scheduler_clone.start_all(cli.no_initial_run).await;
                 });
             }
 

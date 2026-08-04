@@ -30,11 +30,11 @@ impl Scheduler {
         }
     }
 
-    pub async fn start_all(&self) {
+    pub async fn start_all(&self, skip_initial_run: bool) {
         let config = self.config_manager.get();
         let topics = config.topics.clone();
         for topic in &topics {
-            self.start_topic(topic).await;
+            self.start_topic(topic, skip_initial_run).await;
         }
         info!("Started {} topic schedulers", topics.len());
     }
@@ -49,7 +49,7 @@ impl Scheduler {
         self.running.lock().await.keys().cloned().collect()
     }
 
-    pub async fn start_topic(&self, topic: &TopicConfig) {
+    pub async fn start_topic(&self, topic: &TopicConfig, skip_initial_run: bool) {
         let mut handles = self.handles.lock().await;
         if let Some(handle) = handles.remove(&topic.name) {
             handle.abort();
@@ -65,8 +65,12 @@ impl Scheduler {
         let handle = tokio::spawn(async move {
             info!(topic = %topic_name, "Scheduler started [interval={}min]", interval_min);
 
-            // 起動時即実行（1回のみ）
-            run_topic_pipeline(&pipeline, &config_manager, &running, &topic_name).await;
+            // 起動時即実行（1回のみ）。--no-run 時はスキップして次の定期実行から始める
+            if skip_initial_run {
+                info!(topic = %topic_name, "起動時実行をスキップ（--no-run）");
+            } else {
+                run_topic_pipeline(&pipeline, &config_manager, &running, &topic_name).await;
+            }
 
             // 実行完了後に interval を計測する方式（実行が interval より長い場合の
             // 連続実行と、次回予定時刻のズレを防ぐ）
