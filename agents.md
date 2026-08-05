@@ -96,6 +96,7 @@ rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
 3. **PowerShell の変数展開が埋め込みシェルで壊れる**（`$var` が消える）。複雑な処理は .ps1/.cmd ファイルに書いて `powershell -ExecutionPolicy Bypass -File xxx.ps1` で実行する。
 4. **PowerShell 5.1 は BOM なし UTF-8 の ps1 内の日本語を読めない**。ps1 に日本語を書く場合は注意。ASCII のみにするか UTF-8 BOM 付きで保存する。
 5. **bat ファイルに日本語を書かない（2026-08-04 実害あり）**。UTF-8 で保存した bat の日本語コメント/echo は、cmd がコードページ 932（Shift-JIS）で読み込むため文字化けし、**後続の行（call やパス指定）まで壊れる**（`'[INFO]' is not recognized` エラー、run.bat が動かない）。bat は**完全に ASCII のみ**で書くこと。D:\学校 の run.bat（ラッパー）は ASCII 化済み。
+6. **if ブロック内の echo に括弧を書かない（2026-08-05 実害あり）**。`if ... ( ... ) else ( ... )` ブロック内で `echo Building (debug)...` のように括弧を含む echo を実行すると、その `)` がブロックの閉じ括弧として解釈され `... was unexpected at this time.` で壊れる。**括弧入り echo はブロックの外に出す**（PROFILE 等の変数を先に set してからブロック外で echo する方式・実装済み）。
 5. **`findstr` は 769 バイトで出力が切れる**。minified な JS/CSS の検索には不向き。`Select-String`（PowerShell）を使う。
 
 ### 2.5 MinGW のヘッダー修復（2026-07-31 実績）
@@ -111,7 +112,21 @@ rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
 ### 2.6 起動スクリプト
 
 - `run.bat` — フロントエンド→バックエンドを毎回ビルドして起動（`%~dp0` 方式なのでどこに置いても動く）
+- **`run.bat --dev`**（2026-08-05 追加）: **debug ビルド**で起動する開発用モード（差分約 14〜16 秒）。`--dev` は for ループで検出するだけ（アプリにそのまま渡してよい: main.rs は未知フラグを無視する）。通常の `run.bat` は release ビルド（incremental 採用後は差分約 20 秒）
 - dev.bat / run-dev.bat は削除済み（ユーザーが不要と判断）
+
+### 2.7 ビルド高速化（2026-08-05 実測・実装済み）
+
+**実測データ**（Ryzen 7 7730U / MinGW、`cargo build --timings` で計測）:
+- release 差分ビルド 60 秒の内訳: **コード生成（LLVM 最適化）60.0s + リンク 1.4s**。ボトルネックはコード生成
+- リンカ（gcc → lld）: 効果なし（リンク 1.4s は元々速い）
+- opt-level=2: 効果なし（差分 59.5s）
+- **`incremental = true`: 差分 60s → 20.1s**（設定変更後の最初の 1 回だけフルビルド 3〜4 分）
+- debug 差分ビルド: 13.7〜16.1s
+
+**実装済み（2026-08-05）**:
+- `Cargo.toml` に `[profile.release] incremental = true` を追加。**「設定を変えた直後の 1 回目は全依存のフルビルド（3〜4 分）が走る**ことを忘れない（RUSTFLAGS 変更や Cargo.toml 変更のたびに発生）
+- `run.bat --dev` で debug ビルド（§2.6）
 
 ---
 
