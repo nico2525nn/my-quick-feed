@@ -1,6 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+// UTC 時刻をローカル時刻（JST）表示に変換する。
+// 対応形式:
+//   - omp セッション: "2026-08-04T13-00-05-385Z"（ダッシュ区切りのため Date が直接パースできない）
+//   - SQLite: "2026-08-05 00:08:37"（UTC。そのまま new Date するとローカル解釈で 9 時間ずれる）
+const fmtLocalTime = (s: string): string => {
+  let d: Date | null = null;
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/);
+  if (m) d = new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+  else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s))
+    d = new Date(s.replace(" ", "T") + "Z");
+  if (d && !isNaN(d.getTime()))
+    return d.toLocaleString("ja-JP", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  return s;
+};
+
 interface SourceConfig {
   type: string;
   url: string;
@@ -575,7 +595,7 @@ export default function TopicsPage() {
                   {detail.posts.map((p) => (
                     <li key={p.id}>
                       <span style={{ color: "var(--text-muted)", marginRight: 8 }}>
-                        {p.created_at}
+                        {fmtLocalTime(p.created_at)}
                       </span>
                       {p.title}
                     </li>
@@ -602,7 +622,7 @@ export default function TopicsPage() {
                     }}
                   >
                     <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>
-                      {s.created_at}
+                      {fmtLocalTime(s.created_at)}
                     </div>
                     <details style={{ marginBottom: 8 }}>
                       <summary

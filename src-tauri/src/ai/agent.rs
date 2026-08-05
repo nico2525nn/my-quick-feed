@@ -189,7 +189,7 @@ JSON以外の出力は絶対に含めないでください。
 
 📡 出典: [パッチノート](https://apexlegends-leaksnews.com/grfhgtr6/), [Reddit (r/apexlegends)](https://www.reddit.com/r/apexlegends/comments/1vek868/)
 
-### 例2: コミュニティ反応形式（SNSの反応・意見をまとめる記事。面白さ重視）
+### 例2: コミュニティ反応形式（SNSの反応・意見をまとめる記事。面白さ重視、ニュースというわけではあんまりない）
 **7人から10人分ほどまで書いていくこと**
 【Apex】リワーク後のエネルギー武器って拾う価値ある？ ←〇〇な人には強化、〇〇には弱体化じゃね
 
@@ -208,22 +208,34 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
 俺のボルトが殺される
 
 📡 出典: [Reddit (r/apexlegends)](https://www.reddit.com/r/apexlegends/comments/1vek868/why_would_i_ever_pick_up_an_energy_gun/)
+重要でない記事はスキップして構いません。記事がない場合は空配列 [] を出力してください。
+
+## 出力形式（必ずこの JSON 配列形式で出力すること。これはテストサンプル）
 [
   {{
-    "title": "記事タイトル",
-    "content": "記事本文（300字程度）",
-    "image_url": "関連画像URL（あれば）",
-    "tags": ["タグ1", "タグ2"],
-    "sources": ["出典1", "出典2"]
+    "title": "【APEX】シーズン30パッチノートまとめ「マークド」",
+    "content": "上記の記事本文に倣う",
+    "image_url": "",
+    "tags": ["パッチノート", "コミュニティ"],
+    "sources": ["[Reddit (r/apexlegends)](https://www.reddit.com/r/apexlegends/comments/example)"]
+  }},
+  {{
+    "title": "【APEX】2件目の記事タイトル（例）",
+    "content": "（2件目以降も同じ形式で並べる）",
+    "image_url": "",
+    "tags": ["コミュニティ"],
+    "sources": ["[Reddit (r/apexuniversity)](https://www.reddit.com/r/apexuniversity/comments/example)"]
   }}
 ]
-重要でない記事はスキップして構いません。
+（上記は形式の例です。件数は 0 件〜N 件で自由）
 
 ## 出力方法（重要）
 生成した記事の JSON 配列を、**ツール（write）を使って次のファイルに書き込んでください**:
 {output_path}
 - ファイルには JSON 配列のみを書き込むこと（説明文や Markdown コードフェンスは不要）
 - **stdout には JSON や余計なテキストを出力しないこと**
+- **書き込み後、必ずツール（read）で output.json を読み込み、JSON としてパースできるか構文チェックしてください**
+- **構文チェックでエラーが出た場合は、ツール（write）で修正してから、再度チェックしてください。構文が通るまで「完了」としないこと**
 - ツールでファイルを書けない場合のみ、やむを得ず stdout に JSON を出力してください。"#,
         topic_name = topic.name,
         language = language,
@@ -346,9 +358,23 @@ Redditで「エネルギー武器拾う奴いるの？」というスレッド�
 fn read_output_json(work_dir: &Path) -> Option<Vec<ArticleResult>> {
     let output_json = work_dir.join("output.json");
     let content = std::fs::read_to_string(&output_json).ok()?;
-    let list = parse_articles_str(&content).filter(|l| !l.is_empty());
-    let _ = std::fs::remove_file(&output_json);
-    list
+    match parse_articles_str(&content) {
+        Some(list) if !list.is_empty() => {
+            let _ = std::fs::remove_file(&output_json);
+            Some(list)
+        }
+        _ => {
+            // パースできない場合は内容の先頭をログに出してデバッグ可能にする
+            let preview: String = content.chars().take(300).collect();
+            warn!(
+                "output.json をパースできません（{} バイト）: {}",
+                content.len(),
+                preview
+            );
+            let _ = std::fs::remove_file(&output_json);
+            None
+        }
+    }
 }
 
 /// OMP を1回実行する（resume_id があれば --resume を付ける）
