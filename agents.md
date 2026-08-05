@@ -32,6 +32,7 @@
 ```
 
 **⚠ run.bat は同期から除外すること（/XF run.bat）**: D:\学校 の run.bat はラッパー（D:\quickfeed を呼ぶだけ）。/MIR 同期でラッパーが D:\quickfeed の本体 run.bat を上書きすると、run.bat が自分自身を call する無限ループになり「動かない」（2026-08-04 実害あり・修正済み）。**run.bat 本体は `run-build.bat` として git 管理**し、同期後に copy で D:\quickfeed\run.bat に反映する（copy コマンドは上記 3 番）。
+**⚠ ラッパーは引数を渡すこと（2026-08-05 実害あり）**: D:\学校 のラッパー run.bat は `call "D:\quickfeed\run.bat" %*` と **%* で引数を渡す**こと。これが無いと `run.bat --no-run` の引数が消えて「--no-run が機能しない」問題になる（実測・修正済み）。echo で引数を表示して確認できる。
 **⚠ run.bat はビルド前に旧アプリを taskkill する**（`taskkill /IM my-quick-feed.exe /F`）。アプリ起動中に再実行すると exe がロックされ cargo build が失敗するため（2026-08-04 実害あり）。
 
 ---
@@ -347,6 +348,7 @@ topics:
 - Dashboard: 稼働状態ピル（Running/Stopped）、トピックカードに記事数・最終投稿時刻・次回実行カウントダウン
 - **⚠ Tauri v2 の invoke 引数は camelCase 必須（重大・2026-08-04 修正）**: Rust 側のパラメータが `topic_id` でも、JS 側は `{ topicId }` で渡す。snake_case で渡すと「missing field `topicId`」エラーで**静かに失敗**する。これが「Refresh ボタンが効かない」問題の根本原因だった（以前はトーストで可視化しただけで、原因は直っていなかった）。Dashboard の `get_posts`/`refresh_topic`、TopicsPage の `refresh_topic` を修正済み。
 - **⚠ SQLite の `created_at` は UTC**（`datetime('now')` = "YYYY-MM-DD HH:MM:SS"）。`new Date(iso)` にそのまま渡すとローカル時刻として解釈され、JST で 9 時間ずれる。**`iso.replace(" ", "T") + "Z"` で UTC 解釈すること**（2026-08-04 修正。fmtRelative/fmtLastTime は共通の `parseUtc` を使う）。
+- **⚠ omp セッションのタイムスタンプも UTC・ダッシュ区切り（2026-08-05 修正）**: `2026-08-04T13-00-05-385Z` 形式（`T13-00-05-385` は JS の Date が直接パースできない）。TopicsPage の `fmtLocalTime` で正規化して UTC パース → `toLocaleString("ja-JP")` でローカル表示。セッション履歴と投稿ニュース一覧の両方に適用。
 - **TopicsPage のリネームバグ（2026-08-04 修正）**: 既存トピックの名前を変更して保存すると、`t.name === editing.name`（編集後の名前）でマッチングして一致せず、**更新が黙って消える**。編集開始時に元の名前を `originalName` に保存してマッチングすること。
 - **BrowserRouter は Tauri で使わない**（2026-08-04 修正）: 非ルートパス（/topics 等）でのリロード時に WebView2 が index.html を返さず 404 になる。**HashRouter を使用**。
 - トピック保存時はバリデーション必須（名前空・ソース URL 空・重複名を弾く。2026-08-04 実装）。失敗は console.error でなくユーザーに見えるメッセージで（保存の無言消失防止）。
@@ -550,5 +552,10 @@ npx vite preview --port 5173 --host 127.0.0.1
 - エージェントは指示通り stdout に JSON を出さず、**自然文だけ**（「完了。`output.json` に3記事を書き込み済み。」「4件の記事を生成しました。出力先: `...\output`」）→ 従来方式では全滅するところ、ファイルから **6 記事 / 3 記事を取得成功**。
 - **resume 二重実行が解消**: 旧方式は「resume 実行 → stdout パース失敗 → 通常実行にフォールバック → 再び OMP 実行（209.5s 追加）」だったが、新方式は output.json があれば即成功（全体 428s → **254s** に短縮）。
 - 記事品質も良好（パッチノート・リーク・サーバー問題など、でっち上げなし・出典リンク付き）。
+
+**2026-08-05 強化（「2件書き込みしたのに記事0件」対策）**:
+- プロンプトの「## 出力方法」に**構文チェック強制**を追加: 「書き込み後、必ずツール（read）で output.json を読み込み、JSON としてパースできるか構文チェック。エラーならツール（write）で修正して再チェック。構文が通るまで『完了』としないこと」。
+- **出力形式のテストサンプルを 2 記事の完全な JSON 配列に強化**（「必ずこの JSON 配列形式で出力すること。これはテストサンプル」）。tags は日本語、sources は Markdown リンク形式 `[出典名](URL)` を明示。
+- アプリ側: `read_output_json` がパースできない場合、**output.json の内容先頭 300 文字をログ出力**（原因のデバッグ容易化）。
 
 **注意**: この方式は omp エージェントが write ツールを持っている前提。ツールを持たないモデルに切り替える場合は stdout 方式に自動フォールバックする（従来の `parse_omp_output` がそのまま残っている）。
